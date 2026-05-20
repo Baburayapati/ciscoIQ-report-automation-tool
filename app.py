@@ -3025,7 +3025,8 @@ def render_upload_sidebar_page(page_name: str) -> bool:
 
     if page_name == "Dashboard":
         run_id_value = st.session_state.get("run_id", "")
-        dash_href = static_app_href(dashboard_href("Overview", run_id=run_id_value))
+        dash_query = f"?view=dashboard&run_id={run_id_value}" if run_id_value else "?view=dashboard"
+        dash_href = static_app_href(dash_query)
         login_href = static_app_href("?page=login")
         upload_href = static_app_href("?page=upload")
         dashboard_static_href = static_app_href("?view=dashboard")
@@ -3134,7 +3135,8 @@ def render_upload_sidebar_page(page_name: str) -> bool:
 
     if page_name == "AI Chatbot":
         run_id_value = st.session_state.get("run_id", "")
-        chat_href = static_app_href(dashboard_href("Chatbot", run_id=run_id_value))
+        chat_query = f"?view=dashboard&tab=Chatbot&run_id={run_id_value}" if run_id_value else "?view=dashboard&tab=Chatbot"
+        chat_href = static_app_href(chat_query)
         st.markdown(f"""
         <div class="dashboard-static-card">
           <div class="dashboard-static-title">AI Chatbot</div>
@@ -3158,11 +3160,11 @@ def render_upload_sidebar_page(page_name: str) -> bool:
             <div class="settings-title">Upload Page</div>
             <div class="settings-desc">Open Program Track Uploads.</div>
           </a>
-          <a class="settings-card" href="{static_app_href(dashboard_href("Overview"))}" target="_blank">
+          <a class="settings-card" href="{static_app_href("?view=dashboard")}" target="_blank">
             <div class="settings-title">Dashboard Link</div>
             <div class="settings-desc">Open management dashboard in a new tab.</div>
           </a>
-          <a class="settings-card" href="{static_app_href(dashboard_href("Chatbot"))}" target="_blank">
+          <a class="settings-card" href="{static_app_href("?view=dashboard&tab=Chatbot")}" target="_blank">
             <div class="settings-title">Chatbot Link</div>
             <div class="settings-desc">Open AI Chatbot in dashboard view.</div>
           </a>
@@ -6276,8 +6278,6 @@ def load_static_saved_dashboard() -> bool:
     if not frames:
         return False
 
-    chatbot_only = (params.get("tab", "") or st.session_state.get("dashboard_tab", "")) == "Chatbot"
-
     uploads = normalize_saved_uploads(load_saved_uploads())
     signature = "|".join(
         f"{item.get('saved_name','')}:{(SAVED_REPORTS_DIR / item.get('saved_name','')).stat().st_mtime_ns}"
@@ -6288,47 +6288,7 @@ def load_static_saved_dashboard() -> bool:
         return True
 
     st.session_state["run_frames"] = frames
-    excel_bytes = st.session_state.get("excel_bytes")
-    try:
-        api_items = [
-            item for item in uploads
-            if canonical_track_name(item.get("track") or infer_program_track(item.get("file_name", ""))[1]) == TRACK_API
-        ]
-        api_paths = []
-        api_labels = []
-        for item in api_items:
-            saved_name = item.get("saved_name", "")
-            saved_path = SAVED_REPORTS_DIR / saved_name
-            if not saved_path.exists() or saved_path.suffix.lower() != ".json":
-                continue
-            api_paths.append(saved_path)
-            api_labels.append(Path(item.get("file_name", saved_path.name)).stem)
-
-        if chatbot_only:
-            excel_bytes = st.session_state.get("excel_bytes")
-        elif len(api_paths) == 1:
-            with tempfile.TemporaryDirectory() as tmpdir:
-                copied = Path(tmpdir) / f"{api_labels[0]}.json"
-                copied.write_bytes(api_paths[0].read_bytes())
-                output_path = Path(tmpdir) / "JMeter_Report.xlsx"
-                build_report(copied, output_path)
-                excel_bytes = output_path.read_bytes()
-        elif len(api_paths) > 1:
-            with tempfile.TemporaryDirectory() as tmpdir:
-                temp_json_paths: List[Path] = []
-                for path, label in zip(api_paths, api_labels):
-                    copied_path = Path(tmpdir) / f"{label}.json"
-                    copied_path.write_bytes(path.read_bytes())
-                    temp_json_paths.append(copied_path)
-                output_path = Path(tmpdir) / "JMeter_Report.xlsx"
-                build_comparison_report(temp_json_paths, api_labels, output_path)
-                excel_bytes = output_path.read_bytes()
-        else:
-            excel_bytes = build_excel_bytes_from_frames(frames)
-    except Exception:
-        excel_bytes = None
-
-    st.session_state["excel_bytes"] = excel_bytes
+    st.session_state["excel_bytes"] = st.session_state.get("excel_bytes")
     st.session_state["report_file_name"] = "JMeter_Report.xlsx"
     st.session_state["messages"] = []
     st.session_state["dashboard_tab"] = "Overview"
