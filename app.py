@@ -33,7 +33,6 @@ TRACK_API = "API"
 TRACK_UI = "UI"
 TRACK_CLOUD = "Cloud Assist Connector"
 TRACK_INVENTORY = "Customer Inventory Benchmarking"
-PROGRAM_CX_AI_ASSISTANT = "CX AI Assistant"
 
 UI_SLA_THRESHOLDS = {
     "FCP": 3.0,
@@ -2575,13 +2574,12 @@ def get_store():
 
 def infer_program_track(label: str) -> Tuple[str, str]:
     name = str(label or "").upper()
-    compact_name = re.sub(r"[^A-Z0-9]", "", name)
     if "ONPREM" in name and "RISK" in name:
         return "Cisco IQ Onprem - Risk App", TRACK_API
     if "ONPREM" in name and "ASSET" in name:
         return "Cisco IQ Onprem - Assets", TRACK_API
-    if "CX AI ASSISTANT" in name or "CX_AI_ASSISTANT" in name or "CXAIASSISTANT" in compact_name:
-        return PROGRAM_CX_AI_ASSISTANT, TRACK_API
+    if "CX AI ASSISTANT" in name or "CX_AI_ASSISTANT" in name or "CXAIASSISTANT" in re.sub(r"[^A-Z0-9]", "", name):
+        return "CX AI Assistant", TRACK_API
 
     if "CLOUD" in name and "CONNECTOR" in name:
         return PROGRAM_SAAS, TRACK_CLOUD
@@ -2611,12 +2609,6 @@ def frame_track_name(frames: Dict[str, pd.DataFrame]) -> str:
     info = frames.get("Run_Info")
     info_row = info.iloc[0].to_dict() if info is not None and not info.empty else {}
     return canonical_track_name(info_row.get("Track") or infer_program_track(frames.get("Label", ""))[1])
-
-
-def frame_program_name(frames: Dict[str, pd.DataFrame]) -> str:
-    info = frames.get("Run_Info")
-    info_row = info.iloc[0].to_dict() if info is not None and not info.empty else {}
-    return str(info_row.get("Program") or infer_program_track(frames.get("Label", ""))[0])
 
 
 def merge_run_frames_by_track(existing_frames: List[Dict[str, pd.DataFrame]], new_frames: List[Dict[str, pd.DataFrame]], track_name: str) -> List[Dict[str, pd.DataFrame]]:
@@ -2882,10 +2874,7 @@ def apply_api_sla_thresholds(df: pd.DataFrame) -> pd.DataFrame:
     ask_mask = feature_text.str.upper().str.contains("ASKAI|ASK AI", regex=True, na=False)
     program_text = work.get("Program", pd.Series("", index=work.index)).astype(str)
     run_text = work.get("Run", pd.Series("", index=work.index)).astype(str)
-    cx_ai_mask = (
-        program_text.str.upper().str.contains("CX AI ASSISTANT|CXAIASSISTANT", regex=True, na=False)
-        | run_text.str.upper().str.contains("CX AI ASSISTANT|CX_AI_ASSISTANT|CXAIASSISTANT", regex=True, na=False)
-    )
+    cx_ai_mask = program_text.str.upper().str.contains("CX AI ASSISTANT", regex=False, na=False) | run_text.str.upper().str.contains("CXAIASSISTANT|CX_AI_ASSISTANT|CX AI ASSISTANT", regex=True, na=False)
     work["SLA Sec"] = np.where(ask_mask | cx_ai_mask, 10.0, 2.0)
 
     avg_series = pd.to_numeric(work.get("Avg ResTime in sec", 0), errors="coerce").fillna(0)
@@ -4450,7 +4439,7 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
         st.session_state.pop("dashboard_dropdown", None)
 
     active_program = st.session_state.get("active_program") or params.get("program", "") or PROGRAM_SAAS
-    program_values = [PROGRAM_SAAS, "Cisco IQ Onprem - Assets", "Cisco IQ Onprem - Risk App", PROGRAM_CX_AI_ASSISTANT, "AI Framework"]
+    program_values = [PROGRAM_SAAS, "Cisco IQ Onprem - Assets", "Cisco IQ Onprem - Risk App", "CX AI Assistant", "AI Framework"]
     if active_program not in program_values:
         active_program = PROGRAM_SAAS
     st.session_state["active_program"] = active_program
@@ -4474,20 +4463,10 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
     tracks_html = ["API", "UI", "Cloud Assist Connector", "Customer Inventory Benchmarking"]
     tabs_html = ["Overview", "Track Comparison", "Detailed Report", "Test Cases Details", "Defect details"]
 
-    available_programs: List[str] = []
-    for frames in run_frames:
-        program_name = frame_program_name(frames)
-        if program_name in program_values and program_name not in available_programs:
-            available_programs.append(program_name)
-    if available_programs and active_program not in available_programs:
-        active_program = available_programs[0]
-        st.session_state["active_program"] = active_program
-
     region_values = sorted({
         str(frames.get("Region", region_from_frames(frames)))
         for frames in run_frames
         if frame_track_name(frames) == active_track
-        and frame_program_name(frames) == active_program
     })
     if not region_values:
         region_values = sorted({str(frames.get("Region", region_from_frames(frames))) for frames in run_frames})
@@ -4551,7 +4530,7 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
     active_program = st.session_state.get("active_program", active_program)
     active_track = st.session_state.get("active_track", active_track)
 
-    if active_program not in {PROGRAM_SAAS, PROGRAM_CX_AI_ASSISTANT}:
+    if active_program != PROGRAM_SAAS:
         with st.container(border=True):
             st.markdown('<div class="panel-title">Coming Soon</div>', unsafe_allow_html=True)
             st.info(f"{active_program} is planned for Q4FY26. Dashboard enablement is in upcoming release windows.")
@@ -5320,7 +5299,7 @@ def normalize_saved_uploads(existing: List[Dict[str, str]]) -> List[Dict[str, st
         file_hash = item.get("file_hash", "")
 
         program_name = item.get("program") or infer_program_track(file_name)[0]
-        if program_name not in {PROGRAM_SAAS, PROGRAM_CX_AI_ASSISTANT}:
+        if program_name != PROGRAM_SAAS:
             to_remove.append(item)
             continue
 
@@ -5386,8 +5365,7 @@ def save_uploaded_files_to_latest(uploaded_files) -> None:
 
     for uploaded_file in uploaded_files:
         original_name = Path(uploaded_file.name).name.replace(" ", "_")
-        program_name, _ = infer_program_track(original_name)
-        clean_name = build_standard_report_name(TRACK_API, program_name, original_name, ".json")
+        clean_name = build_standard_report_name(TRACK_API, PROGRAM_SAAS, original_name, ".json")
         file_bytes = uploaded_file.getvalue()
         file_hash = hashlib.sha256(file_bytes).hexdigest()
 
@@ -5402,7 +5380,7 @@ def save_uploaded_files_to_latest(uploaded_files) -> None:
         saved_path.write_bytes(file_bytes)
 
         info = infer_saved_report_info(clean_name)
-        program_name, track_name = infer_program_track(original_name)
+        program_name, track_name = infer_program_track(clean_name)
 
         existing.insert(0, {
             "uploaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
