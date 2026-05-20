@@ -4340,6 +4340,77 @@ def render_detailed_report_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+def render_test_cases_details_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> None:
+    st.markdown('<div class="panel"><div class="panel-title">TEST CASES DETAILS</div>', unsafe_allow_html=True)
+    st.info("Jira Xray test cases are not connected yet. This view shows performance result rows in test-case format so they can be mapped to Xray test cases later.")
+
+    active_track = canonical_track_name(st.session_state.get("active_track") or params.get("track", "") or TRACK_API)
+    df = combined_df(run_frames)
+    if active_track == TRACK_UI:
+        ui_detail = build_ui_raw_detail_df(run_frames)
+        if ui_detail.empty:
+            st.info("No UI test case details are available for the selected filters.")
+            st.markdown("</div>", unsafe_allow_html=True)
+            return
+        st.dataframe(ui_detail, use_container_width=True, hide_index=True, height=min(760, 78 + 28 * len(ui_detail)))
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    df = normalize_sla_for_dashboard_df(df, active_track)
+    if df.empty:
+        st.info("No test case details are available for the selected filters.")
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    if "Scenario" not in df.columns:
+        df["Scenario"] = df.get("Feature", "N/A")
+    df["Test Case"] = df["Scenario"].astype(str)
+    df["Xray Test Key"] = ""
+    df["Xray Status"] = "Not Connected"
+
+    c1, c2, c3 = st.columns(3)
+    result_files = sorted(df.get("Run", pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
+    statuses = sorted(df.get("SLA Status", pd.Series(dtype=str)).dropna().astype(str).unique().tolist())
+    selected_files = c1.multiselect("Result File", result_files, default=result_files)
+    selected_statuses = c2.multiselect("SLA Status", statuses, default=statuses)
+    search_text = c3.text_input("Search Test Case", "")
+
+    filtered = df.copy()
+    if selected_files and "Run" in filtered.columns:
+        filtered = filtered[filtered["Run"].astype(str).isin(selected_files)]
+    if selected_statuses and "SLA Status" in filtered.columns:
+        filtered = filtered[filtered["SLA Status"].astype(str).isin(selected_statuses)]
+    if search_text:
+        search_cols = safe_cols(filtered, ["Feature", "Scenario", "Test Case", "Endpoint", "Run", "Region"])
+        if search_cols:
+            mask = filtered[search_cols].astype(str).apply(lambda col: col.str.contains(search_text, case=False, na=False)).any(axis=1)
+            filtered = filtered[mask]
+
+    view_cols = safe_cols(
+        filtered,
+        [
+            "Xray Test Key",
+            "Xray Status",
+            "Run",
+            "Region",
+            "Feature",
+            "Test Case",
+            "Endpoint",
+            "sampleCount",
+            "errorCount",
+            "errorPct",
+            "Avg ResTime in sec",
+            "Min ResTime in sec",
+            "MaxRes Time in sec",
+            "SLA Sec",
+            "SLA Status",
+            "SLA Breach Sec",
+        ],
+    )
+    st.dataframe(filtered[view_cols], use_container_width=True, hide_index=True, height=720)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
 def render_defect_details_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> None:
     st.markdown('<div class="panel"><div class="panel-title">DEFECT DETAILS</div>', unsafe_allow_html=True)
     st.info("No defect details are available yet. Jira or bug-tracking tickets will appear here once provided.")
@@ -4415,7 +4486,7 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
     selected_tab = requested_tab or url_tab or "Overview"
     legacy_tabs = {"Drilldown": "Detailed Report", "Compare": "Track Comparison", "Reports": "Overview", "Trends": "Overview"}
     selected_tab = legacy_tabs.get(selected_tab, selected_tab)
-    if selected_tab not in ["Overview", "Track Comparison", "Detailed Report", "Defect details", "Chatbot"]:
+    if selected_tab not in ["Overview", "Track Comparison", "Detailed Report", "Test Cases Details", "Defect details", "Chatbot"]:
         selected_tab = "Overview"
     st.session_state["dashboard_tab"] = selected_tab
     if requested_tab:
@@ -4444,7 +4515,7 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
     st.session_state["active_track"] = active_track
 
     tracks_html = ["API", "UI", "Cloud Assist Connector", "Customer Inventory Benchmarking"]
-    tabs_html = ["Overview", "Track Comparison", "Detailed Report", "Defect details"]
+    tabs_html = ["Overview", "Track Comparison", "Detailed Report", "Test Cases Details", "Defect details"]
 
     region_values = sorted({
         str(frames.get("Region", region_from_frames(frames)))
@@ -4555,6 +4626,9 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
 
         if selected_tab == "Detailed Report":
             render_detailed_report_tab(selected_frames)
+            return
+        if selected_tab == "Test Cases Details":
+            render_test_cases_details_tab(selected_frames)
             return
         if selected_tab == "Defect details":
             render_defect_details_tab(selected_frames)
