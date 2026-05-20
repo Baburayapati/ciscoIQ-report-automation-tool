@@ -24,6 +24,7 @@ from main import build_report, build_comparison_report, build_single_report_fram
 
 APP_TITLE = "CiscoIQ Performance Report App"
 APP_NAME_TOKEN = "CiscoIQ"
+STATIC_APP_URL = "https://ciscoiq-report-automation-application.streamlit.app/"
 
 
 SAVED_REPORT_LIMIT = 15
@@ -3044,24 +3045,28 @@ def render_upload_left_panel() -> str:
 
 def render_upload_sidebar_page(page_name: str) -> bool:
     """Return True if a sidebar page was rendered and upload cards should stop."""
-    base_app_url = "https://ciscoiq-report-automation-app.streamlit.app/"
+    base_app_url = STATIC_APP_URL
 
     if page_name == "Dashboard":
         run_id_value = st.session_state.get("run_id", "")
-        dash_href = dashboard_href("Overview", run_id=run_id_value)
+        dash_href = static_app_href(dashboard_href("Overview", run_id=run_id_value))
+        login_href = static_app_href("?page=login")
+        upload_href = static_app_href("?page=upload")
+        dashboard_static_href = static_app_href("?view=dashboard")
+        chatbot_static_href = static_app_href("?view=dashboard&tab=Chatbot")
         st.markdown(f"""
         <div class="dashboard-static-card">
           <div class="dashboard-static-title">View All Results</div>
           <div class="dashboard-static-desc">
             Share this dashboard URL with management. After you generate results, this opens the latest dashboard view.
           </div>
-          <a class="dashboard-static-btn" {full_page_link_attrs(dash_href)}>Open Results Dashboard →</a>
-          <div class="static-url-box">{dash_href}</div>
+          <a class="dashboard-static-btn" href="{dash_href}" target="_blank">Open Results Dashboard ↗</a>
+          <div class="static-url-box">{html.escape(dash_href)}</div>
           <div class="page-url-row">
-            <span>Login:</span> <code>{base_app_url}?page=login</code><br/>
-            <span>Upload:</span> <code>{base_app_url}?page=upload</code><br/>
-            <span>Dashboard:</span> <code>{base_app_url}?view=dashboard</code><br/>
-            <span>Chatbot:</span> <code>{base_app_url}?view=dashboard&tab=Chatbot</code>
+            <span>Login:</span> <code>{html.escape(login_href)}</code><br/>
+            <span>Upload:</span> <code>{html.escape(upload_href)}</code><br/>
+            <span>Dashboard:</span> <code>{html.escape(dashboard_static_href)}</code><br/>
+            <span>Chatbot:</span> <code>{html.escape(chatbot_static_href)}</code>
           </div>
         </div>
         """, unsafe_allow_html=True)
@@ -3153,15 +3158,15 @@ def render_upload_sidebar_page(page_name: str) -> bool:
 
     if page_name == "AI Chatbot":
         run_id_value = st.session_state.get("run_id", "")
-        chat_href = dashboard_href("Chatbot", run_id=run_id_value)
+        chat_href = static_app_href(dashboard_href("Chatbot", run_id=run_id_value))
         st.markdown(f"""
         <div class="dashboard-static-card">
           <div class="dashboard-static-title">AI Chatbot</div>
           <div class="dashboard-static-desc">
             Share this static chatbot URL to open the dashboard chatbot. After results are generated, it opens with the latest available data.
           </div>
-          <a class="dashboard-static-btn" {full_page_link_attrs(chat_href)}>Open AI Chatbot →</a>
-          <div class="static-url-box">{chat_href}</div>
+          <a class="dashboard-static-btn" href="{chat_href}" target="_blank">Open AI Chatbot ↗</a>
+          <div class="static-url-box">{html.escape(chat_href)}</div>
         </div>
         """, unsafe_allow_html=True)
         return True
@@ -3177,11 +3182,11 @@ def render_upload_sidebar_page(page_name: str) -> bool:
             <div class="settings-title">Upload Page</div>
             <div class="settings-desc">Open Program Track Uploads.</div>
           </a>
-          <a class="settings-card" {full_page_link_attrs(dashboard_href("Overview"))}>
+          <a class="settings-card" href="{static_app_href(dashboard_href("Overview"))}" target="_blank">
             <div class="settings-title">Dashboard Link</div>
-            <div class="settings-desc">Open management dashboard in this tab.</div>
+            <div class="settings-desc">Open management dashboard in a new tab.</div>
           </a>
-          <a class="settings-card" {full_page_link_attrs(dashboard_href("Chatbot"))}>
+          <a class="settings-card" href="{static_app_href(dashboard_href("Chatbot"))}" target="_blank">
             <div class="settings-title">Chatbot Link</div>
             <div class="settings-desc">Open AI Chatbot in dashboard view.</div>
           </a>
@@ -3233,6 +3238,10 @@ def dashboard_href(tab_name: str = "Overview", **overrides: str) -> str:
     if run_id_value:
         query["run_id"] = run_id_value
     return "?" + urlencode(query)
+
+
+def static_app_href(query_href: str) -> str:
+    return STATIC_APP_URL.rstrip("/") + "/" + query_href
 
 
 def full_page_link_attrs(href: str) -> str:
