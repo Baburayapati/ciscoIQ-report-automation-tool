@@ -2578,7 +2578,7 @@ def infer_program_track(label: str) -> Tuple[str, str]:
         return "Cisco IQ Onprem - Risk App", TRACK_API
     if "ONPREM" in name and "ASSET" in name:
         return "Cisco IQ Onprem - Assets", TRACK_API
-    if "CX AI ASSISTANT" in name or "CX_AI_ASSISTANT" in name or "CXAIASSISTANT" in re.sub(r"[^A-Z0-9]", "", name):
+    if "CX AI ASSISTANT" in name or "CX_AI_ASSISTANT" in name:
         return "CX AI Assistant", TRACK_API
 
     if "CLOUD" in name and "CONNECTOR" in name:
@@ -2872,10 +2872,7 @@ def apply_api_sla_thresholds(df: pd.DataFrame) -> pd.DataFrame:
 
     feature_text = work["Feature"].astype(str)
     ask_mask = feature_text.str.upper().str.contains("ASKAI|ASK AI", regex=True, na=False)
-    program_text = work.get("Program", pd.Series("", index=work.index)).astype(str)
-    run_text = work.get("Run", pd.Series("", index=work.index)).astype(str)
-    cx_ai_mask = program_text.str.upper().str.contains("CX AI ASSISTANT", regex=False, na=False) | run_text.str.upper().str.contains("CXAIASSISTANT|CX_AI_ASSISTANT|CX AI ASSISTANT", regex=True, na=False)
-    work["SLA Sec"] = np.where(ask_mask | cx_ai_mask, 10.0, 2.0)
+    work["SLA Sec"] = np.where(ask_mask, 10.0, 2.0)
 
     avg_series = pd.to_numeric(work.get("Avg ResTime in sec", 0), errors="coerce").fillna(0)
     work["SLA Status"] = (avg_series <= pd.to_numeric(work["SLA Sec"], errors="coerce").fillna(2.0)).map({True: "PASS", False: "FAIL"})
@@ -2946,12 +2943,9 @@ def sla_color_for_track(track_name: str, metric_value: float) -> float:
 def combined_df(run_frames: List[Dict[str, pd.DataFrame]]) -> pd.DataFrame:
     parts = []
     for frames in run_frames:
-        info = frames.get("Run_Info")
-        info_row = info.iloc[0].to_dict() if info is not None and not info.empty else {}
         tmp = frames["APIs"].copy()
         tmp["Run"] = frames["Label"]
         tmp["Region"] = frames.get("Region", region_from_frames(frames))
-        tmp["Program"] = info_row.get("Program") or infer_program_track(frames.get("Label", ""))[0]
         parts.append(tmp)
     return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 
@@ -3634,11 +3628,6 @@ def get_filtered_frames(run_frames: List[Dict[str, pd.DataFrame]], forced_region
     meta = meta[meta["Track"].map(canonical_track_name) == normalized_forced_track].copy()
     if meta.empty:
         return []
-
-    if active_program and active_program != "All":
-        meta = meta[meta["Program"].astype(str) == str(active_program)].copy()
-        if meta.empty:
-            return []
 
     if forced_region and forced_region != "All":
         meta = meta[meta["Region"].astype(str) == str(forced_region)].copy()
