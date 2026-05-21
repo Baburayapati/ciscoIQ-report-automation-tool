@@ -3401,7 +3401,7 @@ def kpi_cards(df: pd.DataFrame, previous_df: pd.DataFrame | None = None, title: 
     """
 
     columns = (3 if compact else 6) if show_health else (2 if compact else 5)
-    component_height = 205 if not compact else 190
+    component_height = (245 if not compact else 230) if show_health else (205 if not compact else 190)
 
     health_card = "" if not show_health else f"""
     <div class="agg-kpi">
@@ -4776,7 +4776,7 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
     if requested_tab:
         st.session_state.pop("dashboard_dropdown", None)
 
-    active_program = st.session_state.get("active_program") or params.get("program", "") or PROGRAM_SAAS
+    active_program = params.get("program", "") or st.session_state.get("active_program") or PROGRAM_SAAS
     program_values = available_program_values(run_frames)
     if active_program not in program_values:
         active_program = PROGRAM_SAAS
@@ -4869,7 +4869,11 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
             st.query_params["region"] = st.session_state.get("active_region", "All")
         st.rerun()
 
-    selected_tab = st.session_state.get("dashboard_tab", selected_tab)
+    selected_tab = url_tab or st.session_state.get("dashboard_tab", selected_tab)
+    selected_tab = legacy_tabs.get(selected_tab, selected_tab)
+    if selected_tab not in tabs_html:
+        selected_tab = "Overview"
+    st.session_state["dashboard_tab"] = selected_tab
     active_program = st.session_state.get("active_program", active_program)
     active_track = st.session_state.get("active_track", active_track)
 
