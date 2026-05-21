@@ -4755,6 +4755,10 @@ def goto_tab_button(label: str, tab_name: str, key: str) -> None:
 
 def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> None:
     # Fast in-app navigation with screenshot-like layout.
+    st.markdown(
+        '<h1 style="text-align:center;color:#123274;font-weight:900;margin:8px 0 22px 0;letter-spacing:.2px;">Performance Results Dashboard</h1>',
+        unsafe_allow_html=True,
+    )
     current_run_id = params.get("run_id", "") or st.session_state.get("run_id", "")
     requested_tab = st.session_state.pop("nav_target", "")
     url_tab = params.get("tab", "")
