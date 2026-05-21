@@ -3833,12 +3833,6 @@ def render_cloud_assist_dashboard(run_frames: List[Dict[str, pd.DataFrame]], com
             st.markdown('<div class="panel-title">SLA Status</div>', unsafe_allow_html=True)
             st.plotly_chart(sla_donut(df), use_container_width=True)
 
-    with st.container(border=True):
-        st.markdown('<div class="panel-title">Cloud Assist Detailed Metrics</div>', unsafe_allow_html=True)
-        detail_df = cloud_overview_detail_df(run_frames, chart_df)
-        st.dataframe(highlight_cloud_sla_cells(detail_df), use_container_width=True, hide_index=True, height=min(620, 78 + 34 * len(detail_df)))
-
-
 def get_filtered_frames(run_frames: List[Dict[str, pd.DataFrame]], forced_region: str = "All", forced_track: str = "API") -> List[Dict[str, pd.DataFrame]]:
     def normalize_filter_date(value: str, label: str) -> str:
         parsed = extract_mmddyyyy_from_text(str(value or "")) or extract_mmddyyyy_from_text(str(label or ""))
