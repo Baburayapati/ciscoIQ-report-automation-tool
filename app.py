@@ -2762,6 +2762,24 @@ def report_title(region: str, users: str, devices: str, include_users: bool = Tr
     return f"{region_token}-{device_token}"
 
 
+def saved_report_display_name(item: Dict[str, str]) -> str:
+    inferred = infer_saved_report_info(item.get("file_name", ""))
+    program = item.get("program") or infer_program_track(item.get("file_name", ""))[0]
+    users = item.get("users") or inferred.get("users", "N/A")
+    date = item.get("date") or inferred.get("date", "N/A")
+    if program == PROGRAM_CX_AI_ASSISTANT:
+        user_value = re.sub(r"(?i)\s*(concurrent\s*)?users?\s*", "", str(users or "").strip())
+        user_value = re.sub(r"(?i)vu", "", user_value).strip() or "NA"
+        if user_value.upper() == "N/A":
+            user_value = "NA"
+        return f"{user_value}Users-{to_mm_dd_yyyy(date)}"
+
+    region = item.get("region") or inferred.get("region", "Unknown")
+    devices = item.get("devices") or inferred.get("devices", "N/A")
+    include_users = canonical_track_name(item.get("track") or infer_program_track(item.get("file_name", ""))[1]) in {TRACK_API, TRACK_UI}
+    return f"{report_title(region, users, devices, include_users=include_users)}-{to_mm_dd_yyyy(date)}"
+
+
 def add_ui_sla_columns(apis_df: pd.DataFrame) -> pd.DataFrame:
     df = apis_df.copy()
     if df.empty:
@@ -3130,9 +3148,11 @@ def render_upload_sidebar_page(page_name: str) -> bool:
 
     if page_name == "Excel Report":
         # API-only Excel page. No HTML wrapper, so no empty bar appears above the heading.
+        active_program = st.session_state.get("active_program", PROGRAM_SAAS)
         api_uploads = [
             item for item in normalize_saved_uploads(load_saved_uploads())
             if (item.get("track") or infer_program_track(item.get("file_name", ""))[1]) == TRACK_API
+            and str(item.get("program") or infer_program_track(item.get("file_name", ""))[0]) == str(active_program)
         ]
 
         with st.container(border=True):
@@ -3146,7 +3166,7 @@ def render_upload_sidebar_page(page_name: str) -> bool:
                 original_name = item.get("file_name", "API_Report.json")
                 saved_name = item.get("saved_name", "")
                 saved_path = SAVED_REPORTS_DIR / saved_name
-                display_name = compact_saved_file_label(original_name)
+                display_name = saved_report_display_name(item)
 
                 st.markdown(f'<div class="excel-only-name">{display_name}</div>', unsafe_allow_html=True)
 
@@ -4418,9 +4438,11 @@ def render_defect_details_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> None
 
 
 def render_dashboard_excel_report_actions(region_focus: str = "All") -> None:
+    active_program = st.session_state.get("active_program", PROGRAM_SAAS)
     api_uploads = [
         item for item in normalize_saved_uploads(load_saved_uploads())
         if canonical_track_name(item.get("track") or infer_program_track(item.get("file_name", ""))[1]) == TRACK_API
+        and str(item.get("program") or infer_program_track(item.get("file_name", ""))[0]) == str(active_program)
     ]
     if region_focus and region_focus != "All":
         api_uploads = [
@@ -4438,7 +4460,7 @@ def render_dashboard_excel_report_actions(region_focus: str = "All") -> None:
         original_name = item.get("file_name", "API_Report.json")
         saved_name = item.get("saved_name", "")
         saved_path = SAVED_REPORTS_DIR / saved_name
-        display_name = compact_saved_file_label(original_name)
+        display_name = saved_report_display_name(item)
         st.markdown(f'<div class="excel-only-name">{display_name}</div>', unsafe_allow_html=True)
         if saved_path.exists():
             try:
@@ -6127,9 +6149,11 @@ def render_api_saved_reports_compact() -> None:
 
 def render_saved_reports_compact_for_track(track_name: str, title: str | None = None, key_prefix: str = "track") -> None:
     uploads = normalize_saved_uploads(load_saved_uploads())
+    active_program = st.session_state.get("active_program", PROGRAM_SAAS)
     track_uploads = [
         item for item in uploads
         if (item.get("track") or infer_program_track(item.get("file_name", ""))[1]) == track_name
+        and str(item.get("program") or infer_program_track(item.get("file_name", ""))[0]) == str(active_program)
     ]
     if not track_uploads:
         st.info(f"No saved {track_name} reports yet.")
@@ -6163,14 +6187,7 @@ def render_saved_reports_compact_for_track(track_name: str, title: str | None = 
 
     for index, item in enumerate(track_uploads, start=1):
         file_path = SAVED_REPORTS_DIR / item.get("saved_name", "")
-        inferred = infer_saved_report_info(item.get("file_name", ""))
-        region = item.get("region") or inferred.get("region", "Unknown")
-        users = item.get("users") or inferred.get("users", "N/A")
-        devices = item.get("devices") or inferred.get("devices", "N/A")
-        date = item.get("date") or inferred.get("date", "N/A")
-        date_token = to_mm_dd_yyyy(date)
-        include_users = track_name in {TRACK_API, TRACK_UI}
-        report_name = f"{report_title(region, users, devices, include_users=include_users)}-{date_token}"
+        report_name = saved_report_display_name(item)
 
         st.markdown('<div class="compact-saved-row">', unsafe_allow_html=True)
         st.markdown(f'<div class="compact-saved-cell-name">{report_name}</div>', unsafe_allow_html=True)

@@ -186,11 +186,11 @@ def apply_common_column_cleanup(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def add_api_sla_columns(apis_df: pd.DataFrame) -> pd.DataFrame:
+def add_api_sla_columns(apis_df: pd.DataFrame, source: str | Path = "") -> pd.DataFrame:
     apis_df = apis_df.copy()
     feature_text = apis_df["Feature"].astype(str).str.upper()
     transaction_text = apis_df.get("transaction", pd.Series("", index=apis_df.index)).astype(str)
-    cx_ai_mask = transaction_text.map(is_cx_ai_assistant_report)
+    cx_ai_mask = is_cx_ai_assistant_report(source) | transaction_text.map(is_cx_ai_assistant_report)
     apis_df["SLA Sec"] = (feature_text.str.startswith("ASKAI") | cx_ai_mask).map({True: 10, False: 2})
     apis_df["SLA Rule"] = apis_df["SLA Sec"].map(
         lambda x: "AskAI/CX AI Assistant APIs SLA < 10 sec" if x == 10 else "Assets, Assessments, Home, Settings and Support APIs SLA < 2 sec"
@@ -254,7 +254,10 @@ def build_single_report_frames(json_path: str | Path):
     df = remove_cx_ai_create_rows(df, json_path)
 
     transactions_df = df[df["transaction"].apply(is_transaction)].copy()
-    apis_df = df[~df["transaction"].apply(is_transaction)].copy()
+    if is_cx_ai_assistant_report(json_path):
+        apis_df = df.copy()
+    else:
+        apis_df = df[~df["transaction"].apply(is_transaction)].copy()
     errors_df = df[pd.to_numeric(df.get("errorCount", 0), errors="coerce").fillna(0) > 0].copy()
 
     split_df = apis_df["transaction"].apply(lambda x: pd.Series(split_api_name(x)))
@@ -263,7 +266,7 @@ def build_single_report_frames(json_path: str | Path):
 
     transactions_df = order_columns(apply_common_column_cleanup(transactions_df), "Transactions")
     errors_df = order_columns(apply_common_column_cleanup(errors_df), "Errors")
-    apis_df = order_columns(add_api_sla_columns(apply_common_column_cleanup(apis_df)), "APIs")
+    apis_df = order_columns(add_api_sla_columns(apply_common_column_cleanup(apis_df), json_path), "APIs")
 
     return {
         "Transactions": transactions_df,
@@ -302,7 +305,8 @@ def bucket_index(seconds: float, is_askai: bool) -> int:
 def prepare_api_df_for_track(json_path: str | Path) -> pd.DataFrame:
     df = load_statistics_json(json_path)
     df = remove_cx_ai_create_rows(df, json_path)
-    df = df[~df["transaction"].apply(is_transaction)].copy()
+    if not is_cx_ai_assistant_report(json_path):
+        df = df[~df["transaction"].apply(is_transaction)].copy()
     split_df = df["transaction"].apply(lambda x: pd.Series(split_api_name(x)))
     split_df.columns = ["Feature", "Scenario", "Endpoint"]
     df = pd.concat([split_df, df], axis=1)
@@ -346,6 +350,7 @@ def track_metric_values(df: pd.DataFrame, track: str, metric: str) -> List[Any]:
 
 def build_track_comparison_matrix(json_paths: List[str | Path], labels: List[str]) -> List[List[Any]]:
     prepared = [prepare_api_df_for_track(path) for path in json_paths]
+    cx_ai_report = any(is_cx_ai_assistant_report(path) or is_cx_ai_assistant_report(label) for path, label in zip(json_paths, labels))
     all_tracks = sorted(
         track
         for track in set().union(*[set(df["Feature"].dropna().astype(str)) for df in prepared])
@@ -354,9 +359,12 @@ def build_track_comparison_matrix(json_paths: List[str | Path], labels: List[str
         and "select customer" not in track.strip().lower()
     )
 
-    askai_tracks = [track for track in all_tracks if str(track).upper().startswith("ASKAI") or is_cx_ai_assistant_report(track)]
-    other_tracks = [track for track in all_tracks if not str(track).upper().startswith("ASKAI")]
-    other_tracks = [track for track in other_tracks if not is_cx_ai_assistant_report(track)]
+    if cx_ai_report:
+        askai_tracks = all_tracks
+        other_tracks = []
+    else:
+        askai_tracks = [track for track in all_tracks if str(track).upper().startswith("ASKAI")]
+        other_tracks = [track for track in all_tracks if not str(track).upper().startswith("ASKAI")]
 
     report_title = " vs ".join(labels)
 
@@ -372,7 +380,7 @@ def build_track_comparison_matrix(json_paths: List[str | Path], labels: List[str
         }
         col = metric_to_col[metric]
 
-        is_askai_section = all(str(track).upper().startswith("ASKAI") or is_cx_ai_assistant_report(track) for track in tracks)
+        is_askai_section = cx_ai_report or all(str(track).upper().startswith("ASKAI") for track in tracks)
         values = pd.to_numeric(g[col], errors="coerce").dropna()
         if values.empty:
             return ["", "", "", "", ""]
@@ -420,7 +428,7 @@ def build_track_comparison_matrix(json_paths: List[str | Path], labels: List[str
 
     add_section(
         matrix,
-        "AskAI / CX AI Assistant Tracks",
+        "CX AI Assistant" if cx_ai_report else "AskAI Tracks",
         askai_tracks,
         ["0-10sec %", "10-20sec %", "20-30sec %", ">30sec %"],
     )
@@ -539,7 +547,8 @@ def build_apis_comparison(json_paths: List[str | Path], labels: List[str]) -> pd
     for path, label in zip(json_paths, labels):
         df = load_statistics_json(path)
         df = remove_cx_ai_create_rows(df, path)
-        df = df[~df["transaction"].apply(is_transaction)].copy()
+        if not is_cx_ai_assistant_report(path):
+            df = df[~df["transaction"].apply(is_transaction)].copy()
 
         split_df = df["transaction"].apply(lambda x: pd.Series(split_api_name(x)))
         split_df.columns = [f"{label} Feature", f"{label} Scenario", f"{label} Endpoint"]
@@ -694,7 +703,7 @@ def style_sheet(ws):
             first_val = str(ws.cell(row=row_idx, column=1).value or "")
             second_val = str(ws.cell(row=row_idx, column=2).value or "")
 
-            if first_val.startswith("AskAI Tracks") or first_val.startswith("AskAI / CX AI Assistant Tracks"):
+            if first_val.startswith("AskAI Tracks") or first_val.startswith("CX AI Assistant") or first_val.startswith("AskAI / CX AI Assistant Tracks"):
                 for col_idx in range(1, ws.max_column + 1):
                     cell = ws.cell(row=row_idx, column=col_idx)
                     cell.fill = PatternFill("solid", fgColor="153B50")
@@ -1126,7 +1135,7 @@ def write_track_comparison_sheet(wb: Workbook, track_matrix: List[List[Any]]):
     # Merge and center section title rows.
     for row_idx in range(1, ws.max_row + 1):
         first_val = str(ws.cell(row=row_idx, column=1).value or "")
-        if first_val.startswith("AskAI Tracks") or first_val.startswith("AskAI / CX AI Assistant Tracks") or first_val.startswith("Assets / Assessments / Home / Settings / Support Tracks"):
+        if first_val.startswith("AskAI Tracks") or first_val.startswith("CX AI Assistant") or first_val.startswith("AskAI / CX AI Assistant Tracks") or first_val.startswith("Assets / Assessments / Home / Settings / Support Tracks"):
             ws.merge_cells(start_row=row_idx, start_column=1, end_row=row_idx, end_column=max(ws.max_column, 7))
             ws.cell(row=row_idx, column=1).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
