@@ -3401,7 +3401,7 @@ def kpi_cards(df: pd.DataFrame, previous_df: pd.DataFrame | None = None, title: 
     """
 
     columns = (3 if compact else 6) if show_health else (2 if compact else 5)
-    component_height = (245 if not compact else 230) if show_health else (205 if not compact else 190)
+    component_height = 205 if not compact else 190
 
     health_card = "" if not show_health else f"""
     <div class="agg-kpi">
@@ -3506,16 +3506,6 @@ body {{
     height:24px;
     margin-top:9px;
 }}
-.health-score-note {{
-    margin:8px 16px 0 16px;
-    padding:8px 10px;
-    border:1px solid #dbe4f0;
-    border-radius:10px;
-    background:#f8fafc;
-    color:#344256;
-    font-size:12px;
-    font-weight:750;
-}}
 @media(max-width:1100px){{
   .agg-kpi-row {{ grid-template-columns: repeat(2, 1fr); }}
   .agg-kpi:nth-child(2n){{border-right:none;}}
@@ -3550,12 +3540,13 @@ body {{
     {extra_cards}
 
   </div>
-  {'<div class="health-score-note">Health Score = SLA Pass % minus sample error rate %, bounded between 0 and 100.</div>' if show_health else ''}
 </div>
 </body>
 </html>
 """
     components.html(html, height=component_height, scrolling=False)
+    if show_health:
+        st.info("Health Score = SLA Pass % minus sample error rate %, bounded between 0 and 100.")
 
 
 def build_run_summary_table(run_frames: List[Dict[str, pd.DataFrame]], include_health: bool = True) -> pd.DataFrame:
@@ -6303,7 +6294,7 @@ def generate_dashboard_from_saved_csv(track_name: str, csv_path: Path, item: Dic
     st.session_state.run_frames = merged_frames
     st.session_state.messages = []
     st.session_state.run_id = new_run_id
-    st.session_state["active_track"] = track_name
+    st.session_state["active_track"] = TRACK_API if any(frame_track_name(frame) == TRACK_API for frame in merged_frames) else track_name
     st.session_state["dashboard_tab"] = "Overview"
 
 
@@ -6373,7 +6364,7 @@ def generate_dashboard_from_uploaded_csv_files(track_name: str, uploaded_files) 
     st.session_state.run_frames = merged_frames
     st.session_state.messages = []
     st.session_state.run_id = new_run_id
-    st.session_state["active_track"] = track_name
+    st.session_state["active_track"] = TRACK_API if any(frame_track_name(frame) == TRACK_API for frame in merged_frames) else track_name
     st.session_state["dashboard_tab"] = "Overview"
 
 
@@ -6913,7 +6904,7 @@ def load_static_saved_dashboard() -> bool:
         if track_name and track_name not in tracks_present:
             tracks_present.append(track_name)
     if tracks_present:
-        st.session_state["active_track"] = tracks_present[0]
+        st.session_state["active_track"] = TRACK_API if TRACK_API in tracks_present else tracks_present[0]
 
     st.session_state["saved_dashboard_signature"] = signature
     st.session_state["run_id"] = "saved-dashboard"
