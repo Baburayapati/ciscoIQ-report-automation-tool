@@ -13,7 +13,6 @@ from typing import Dict, List, Tuple
 from datetime import datetime
 from urllib.parse import urlencode
 
-import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -2578,7 +2577,7 @@ def infer_program_track(label: str) -> Tuple[str, str]:
         return "Cisco IQ Onprem - Risk App", TRACK_API
     if "ONPREM" in name and "ASSET" in name:
         return "Cisco IQ Onprem - Assets", TRACK_API
-    if "CX AI ASSISTANT" in name or "CX_AI_ASSISTANT" in name:
+    if "CX AI ASSISTANT" in name or "CX_AI_ASSISTANT" in name or "CXAIASSISTANT" in re.sub(r"[^A-Z0-9]", "", name):
         return "CX AI Assistant", TRACK_API
 
     if "CLOUD" in name and "CONNECTOR" in name:
@@ -2615,6 +2614,20 @@ def merge_run_frames_by_track(existing_frames: List[Dict[str, pd.DataFrame]], ne
     target_track = canonical_track_name(track_name)
     kept = [frames for frames in (existing_frames or []) if frame_track_name(frames) != target_track]
     merged = kept + (new_frames or [])
+    return add_region_to_frames(merged)
+
+
+def current_or_saved_run_frames() -> List[Dict[str, pd.DataFrame]]:
+    current = st.session_state.get("run_frames", []) or []
+    saved = load_saved_dashboard_frames()
+    if not current:
+        return saved
+
+    existing_labels = {str(frames.get("Label", "")) for frames in current}
+    merged = list(current)
+    for frames in saved:
+        if str(frames.get("Label", "")) not in existing_labels:
+            merged.append(frames)
     return add_region_to_frames(merged)
 
 
@@ -2872,7 +2885,11 @@ def apply_api_sla_thresholds(df: pd.DataFrame) -> pd.DataFrame:
 
     feature_text = work["Feature"].astype(str)
     ask_mask = feature_text.str.upper().str.contains("ASKAI|ASK AI", regex=True, na=False)
-    work["SLA Sec"] = np.where(ask_mask, 10.0, 2.0)
+    program_text = work.get("Program", pd.Series("", index=work.index)).astype(str)
+    run_text = work.get("Run", pd.Series("", index=work.index)).astype(str)
+    cx_ai_mask = program_text.str.upper().str.contains("CX AI ASSISTANT", regex=False, na=False) | run_text.str.upper().str.contains("CXAIASSISTANT|CX_AI_ASSISTANT|CX AI ASSISTANT", regex=True, na=False)
+    work["SLA Sec"] = 2.0
+    work.loc[ask_mask | cx_ai_mask, "SLA Sec"] = 10.0
 
     avg_series = pd.to_numeric(work.get("Avg ResTime in sec", 0), errors="coerce").fillna(0)
     work["SLA Status"] = (avg_series <= pd.to_numeric(work["SLA Sec"], errors="coerce").fillna(2.0)).map({True: "PASS", False: "FAIL"})
@@ -2943,9 +2960,12 @@ def sla_color_for_track(track_name: str, metric_value: float) -> float:
 def combined_df(run_frames: List[Dict[str, pd.DataFrame]]) -> pd.DataFrame:
     parts = []
     for frames in run_frames:
+        info = frames.get("Run_Info")
+        info_row = info.iloc[0].to_dict() if info is not None and not info.empty else {}
         tmp = frames["APIs"].copy()
         tmp["Run"] = frames["Label"]
         tmp["Region"] = frames.get("Region", region_from_frames(frames))
+        tmp["Program"] = info_row.get("Program") or infer_program_track(frames.get("Label", ""))[0]
         parts.append(tmp)
     return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 
@@ -3628,6 +3648,11 @@ def get_filtered_frames(run_frames: List[Dict[str, pd.DataFrame]], forced_region
     meta = meta[meta["Track"].map(canonical_track_name) == normalized_forced_track].copy()
     if meta.empty:
         return []
+
+    if active_program and active_program != "All":
+        meta = meta[meta["Program"].astype(str) == str(active_program)].copy()
+        if meta.empty:
+            return []
 
     if forced_region and forced_region != "All":
         meta = meta[meta["Region"].astype(str) == str(forced_region)].copy()
@@ -5803,7 +5828,7 @@ def generate_dashboard_from_saved_csv(track_name: str, csv_path: Path, item: Dic
         "Run_Info": run_info,
     }]
 
-    merged_frames = merge_run_frames_by_track(st.session_state.get("run_frames", []), run_frames, track_name)
+    merged_frames = merge_run_frames_by_track(current_or_saved_run_frames(), run_frames, track_name)
     excel_bytes = build_excel_bytes_from_frames(run_frames)
     new_run_id = uuid.uuid4().hex
     report_name = f"{track_name.replace(' ', '_')}_Report.xlsx"
@@ -5862,7 +5887,7 @@ def generate_dashboard_from_uploaded_csv_files(track_name: str, uploaded_files) 
         except Exception:
             pass
 
-    merged_frames = merge_run_frames_by_track(st.session_state.get("run_frames", []), run_frames, track_name)
+    merged_frames = merge_run_frames_by_track(current_or_saved_run_frames(), run_frames, track_name)
     new_run_id = uuid.uuid4().hex
     dashboard_store[new_run_id] = {
         "run_frames": merged_frames,
@@ -6525,11 +6550,12 @@ elif team_upload_view:
                     else:
                         build_comparison_report(json_paths, labels, output_path)
                     run_frames = add_region_to_frames(run_frames)
+                    merged_frames = merge_run_frames_by_track(current_or_saved_run_frames(), run_frames, TRACK_API)
                     excel_bytes = output_path.read_bytes()
                     new_run_id = uuid.uuid4().hex
-                    dashboard_store[new_run_id] = {"run_frames": run_frames, "excel_bytes": excel_bytes, "report_file_name": "JMeter_Report.xlsx"}
+                    dashboard_store[new_run_id] = {"run_frames": merged_frames, "excel_bytes": excel_bytes, "report_file_name": "JMeter_Report.xlsx"}
                     st.session_state.excel_bytes = excel_bytes
-                    st.session_state.run_frames = run_frames
+                    st.session_state.run_frames = merged_frames
                     st.session_state.report_file_name = "JMeter_Report.xlsx"
                     st.session_state.excel_api_only = True
                     st.session_state.messages = []
