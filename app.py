@@ -2780,6 +2780,23 @@ def saved_report_display_name(item: Dict[str, str]) -> str:
     return f"{report_title(region, users, devices, include_users=include_users)}-{to_mm_dd_yyyy(date)}"
 
 
+def saved_report_program_name(item: Dict[str, str]) -> str:
+    return str(item.get("program") or infer_program_track(item.get("file_name", ""))[0])
+
+
+def saved_report_program_heading(program_name: str) -> str:
+    if program_name == PROGRAM_SAAS:
+        return "CiscoIQ-SaaS"
+    return str(program_name or "Unknown Program")
+
+
+def grouped_saved_uploads_by_program(uploads: List[Dict[str, str]]) -> Dict[str, List[Dict[str, str]]]:
+    grouped: Dict[str, List[Dict[str, str]]] = {}
+    for item in uploads:
+        grouped.setdefault(saved_report_program_name(item), []).append(item)
+    return dict(sorted(grouped.items(), key=lambda pair: saved_report_program_heading(pair[0]).lower()))
+
+
 def add_ui_sla_columns(apis_df: pd.DataFrame, program_name: str = "") -> pd.DataFrame:
     df = apis_df.copy()
     if df.empty:
@@ -3121,88 +3138,12 @@ def render_upload_sidebar_page(page_name: str) -> bool:
         return True
 
     if page_name == "Reports":
-        r1, r2 = st.columns(2, gap="medium")
-        r3, r4 = st.columns(2, gap="medium")
-
-        with r1:
-            with st.container(border=True):
-                st.markdown("### API Reports")
-                render_saved_reports_compact_for_track(TRACK_API, title="", key_prefix="reports_api")
-
-        with r2:
-            with st.container(border=True):
-                st.markdown("### UI Reports")
-                render_saved_reports_compact_for_track(TRACK_UI, title="", key_prefix="reports_ui")
-
-        with r3:
-            with st.container(border=True):
-                st.markdown("### Cloud Assist Reports")
-                render_saved_reports_compact_for_track(TRACK_CLOUD, title="", key_prefix="reports_cloud")
-
-        with r4:
-            with st.container(border=True):
-                st.markdown("### Inventory Reports")
-                render_saved_reports_compact_for_track(TRACK_INVENTORY, title="", key_prefix="reports_inventory")
+        render_saved_reports_grouped_by_program()
 
         return True
 
     if page_name == "Excel Report":
-        # API-only Excel page. No HTML wrapper, so no empty bar appears above the heading.
-        active_program = st.session_state.get("active_program", PROGRAM_SAAS)
-        api_uploads = [
-            item for item in normalize_saved_uploads(load_saved_uploads())
-            if (item.get("track") or infer_program_track(item.get("file_name", ""))[1]) == TRACK_API
-            and str(item.get("program") or infer_program_track(item.get("file_name", ""))[0]) == str(active_program)
-        ]
-
-        with st.container(border=True):
-            st.markdown('<div class="excel-only-title">API Excel Reports</div>', unsafe_allow_html=True)
-
-            if not api_uploads:
-                st.info("No saved API reports yet.")
-                return True
-
-            for idx, item in enumerate(api_uploads):
-                original_name = item.get("file_name", "API_Report.json")
-                saved_name = item.get("saved_name", "")
-                saved_path = SAVED_REPORTS_DIR / saved_name
-                display_name = saved_report_display_name(item)
-
-                st.markdown(f'<div class="excel-only-name">{display_name}</div>', unsafe_allow_html=True)
-
-                col_download, col_remove = st.columns(2, gap="medium")
-
-                with col_download:
-                    if saved_path.exists():
-                        try:
-                            excel_bytes_for_download = cached_excel_bytes_for_saved_api(
-                                str(saved_path),
-                                display_name,
-                                saved_path.stat().st_mtime,
-                            )
-                            st.download_button(
-                                "Download Excel Report",
-                                data=excel_bytes_for_download,
-                                file_name=f"{display_name}.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                key=f"excel_simple_download_{idx}_{sanitize_token(saved_name)}",
-                                use_container_width=True,
-                            )
-                        except Exception as exc:
-                            st.error(f"Unable to prepare Excel report: {exc}")
-                    else:
-                        st.warning("Saved source file is missing.")
-
-                with col_remove:
-                    if st.button(
-                        "Remove",
-                        key=f"excel_simple_remove_{idx}_{sanitize_token(saved_name)}",
-                        use_container_width=True,
-                    ):
-                        remove_saved_upload(saved_name)
-                        st.rerun()
-
-                st.markdown('<div class="excel-only-gap"></div>', unsafe_allow_html=True)
+        render_excel_reports_grouped_by_program()
 
         return True
 
@@ -6159,13 +6100,86 @@ def render_api_saved_reports_compact() -> None:
     render_saved_reports_compact_for_track(TRACK_API, title="Saved API Reports", key_prefix="api")
 
 
-def render_saved_reports_compact_for_track(track_name: str, title: str | None = None, key_prefix: str = "track") -> None:
+def render_excel_reports_grouped_by_program() -> None:
+    api_uploads = [
+        item for item in normalize_saved_uploads(load_saved_uploads())
+        if canonical_track_name(item.get("track") or infer_program_track(item.get("file_name", ""))[1]) == TRACK_API
+    ]
+    with st.container(border=True):
+        st.markdown('<div class="excel-only-title">API Excel Reports</div>', unsafe_allow_html=True)
+        if not api_uploads:
+            st.info("No saved API reports yet.")
+            return
+
+        for program_name, items in grouped_saved_uploads_by_program(api_uploads).items():
+            st.markdown(f"### {saved_report_program_heading(program_name)}")
+            for idx, item in enumerate(items, start=1):
+                saved_name = item.get("saved_name", "")
+                saved_path = SAVED_REPORTS_DIR / saved_name
+                display_name = saved_report_display_name(item)
+                st.markdown(f'<div class="excel-only-name">{display_name}</div>', unsafe_allow_html=True)
+                col_download, col_remove = st.columns(2, gap="medium")
+
+                with col_download:
+                    if saved_path.exists():
+                        try:
+                            excel_bytes_for_download = cached_excel_bytes_for_saved_api(
+                                str(saved_path),
+                                display_name,
+                                saved_path.stat().st_mtime,
+                            )
+                            st.download_button(
+                                "Download Excel Report",
+                                data=excel_bytes_for_download,
+                                file_name=f"{display_name}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                key=f"excel_group_download_{sanitize_token(program_name)}_{idx}_{sanitize_token(saved_name)}",
+                                use_container_width=True,
+                            )
+                        except Exception as exc:
+                            st.error(f"Unable to prepare Excel report: {exc}")
+                    else:
+                        st.warning("Saved source file is missing.")
+
+                with col_remove:
+                    if st.button("Remove", key=f"excel_group_remove_{sanitize_token(program_name)}_{idx}_{sanitize_token(saved_name)}", use_container_width=True):
+                        remove_saved_upload(saved_name)
+                        st.rerun()
+
+                st.markdown('<div class="excel-only-gap"></div>', unsafe_allow_html=True)
+
+
+def render_saved_reports_grouped_by_program() -> None:
     uploads = normalize_saved_uploads(load_saved_uploads())
-    active_program = st.session_state.get("active_program", PROGRAM_SAAS)
+    if not uploads:
+        st.info("No saved reports yet.")
+        return
+
+    track_titles = {
+        TRACK_API: "API Reports",
+        TRACK_UI: "UI Reports",
+        TRACK_CLOUD: "Cloud Assist Reports",
+        TRACK_INVENTORY: "Inventory Reports",
+    }
+    for program_name, items in grouped_saved_uploads_by_program(uploads).items():
+        with st.container(border=True):
+            st.markdown(f"## {saved_report_program_heading(program_name)}")
+            for track_name, track_title in track_titles.items():
+                track_items = [
+                    item for item in items
+                    if canonical_track_name(item.get("track") or infer_program_track(item.get("file_name", ""))[1]) == track_name
+                ]
+                if not track_items:
+                    continue
+                st.markdown(f"### {track_title}")
+                render_saved_reports_compact_for_track(track_name, title="", key_prefix=f"reports_{sanitize_token(program_name)}_{sanitize_token(track_name)}", uploads=track_items)
+
+
+def render_saved_reports_compact_for_track(track_name: str, title: str | None = None, key_prefix: str = "track", uploads: List[Dict[str, str]] | None = None) -> None:
+    uploads = normalize_saved_uploads(load_saved_uploads()) if uploads is None else uploads
     track_uploads = [
         item for item in uploads
-        if (item.get("track") or infer_program_track(item.get("file_name", ""))[1]) == track_name
-        and str(item.get("program") or infer_program_track(item.get("file_name", ""))[0]) == str(active_program)
+        if canonical_track_name(item.get("track") or infer_program_track(item.get("file_name", ""))[1]) == track_name
     ]
     if not track_uploads:
         st.info(f"No saved {track_name} reports yet.")
@@ -6204,7 +6218,11 @@ def render_saved_reports_compact_for_track(track_name: str, title: str | None = 
         st.markdown('<div class="compact-saved-row">', unsafe_allow_html=True)
         st.markdown(f'<div class="compact-saved-cell-name">{report_name}</div>', unsafe_allow_html=True)
 
-        action_generate_col, action_remove_col = st.columns(2, gap="small")
+        if track_name == TRACK_API:
+            action_generate_col, action_download_col, action_remove_col = st.columns(3, gap="small")
+        else:
+            action_generate_col, action_remove_col = st.columns(2, gap="small")
+            action_download_col = None
         if file_path.exists():
             if action_generate_col.button("Generate Results", key=f"{key_prefix}_compact_generate_{index}_{item.get('saved_name','')}", use_container_width=True):
                 try:
@@ -6216,6 +6234,23 @@ def render_saved_reports_compact_for_track(track_name: str, title: str | None = 
                     st.rerun()
                 except Exception as exc:
                     st.error(f"Failed to generate saved report: {exc}")
+            if action_download_col is not None:
+                try:
+                    excel_bytes_for_download = cached_excel_bytes_for_saved_api(
+                        str(file_path),
+                        report_name,
+                        file_path.stat().st_mtime,
+                    )
+                    action_download_col.download_button(
+                        "Download Excel",
+                        data=excel_bytes_for_download,
+                        file_name=f"{report_name}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key=f"{key_prefix}_compact_download_{index}_{item.get('saved_name','')}",
+                        use_container_width=True,
+                    )
+                except Exception as exc:
+                    action_download_col.error(f"Excel unavailable: {exc}")
         else:
             action_generate_col.warning("Missing")
 
