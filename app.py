@@ -28,6 +28,7 @@ STATIC_APP_URL = "https://ciscoiq-report-automation-application.streamlit.app/"
 
 SAVED_REPORT_LIMIT = 15
 PROGRAM_SAAS = "Cisco IQ SaaS Support Services"
+PROGRAM_CX_AI_ASSISTANT = "CX AI Assistant"
 TRACK_API = "API"
 TRACK_UI = "UI"
 TRACK_CLOUD = "Cloud Assist Connector"
@@ -2578,7 +2579,7 @@ def infer_program_track(label: str) -> Tuple[str, str]:
     if "ONPREM" in name and "ASSET" in name:
         return "Cisco IQ Onprem - Assets", TRACK_API
     if "CX AI ASSISTANT" in name or "CX_AI_ASSISTANT" in name or "CXAIASSISTANT" in re.sub(r"[^A-Z0-9]", "", name):
-        return "CX AI Assistant", TRACK_API
+        return PROGRAM_CX_AI_ASSISTANT, TRACK_API
 
     if "CLOUD" in name and "CONNECTOR" in name:
         return PROGRAM_SAAS, TRACK_CLOUD
@@ -2610,9 +2611,19 @@ def frame_track_name(frames: Dict[str, pd.DataFrame]) -> str:
     return canonical_track_name(info_row.get("Track") or infer_program_track(frames.get("Label", ""))[1])
 
 
+def frame_program_name(frames: Dict[str, pd.DataFrame]) -> str:
+    info = frames.get("Run_Info")
+    info_row = info.iloc[0].to_dict() if info is not None and not info.empty else {}
+    return str(info_row.get("Program") or infer_program_track(frames.get("Label", ""))[0])
+
+
 def merge_run_frames_by_track(existing_frames: List[Dict[str, pd.DataFrame]], new_frames: List[Dict[str, pd.DataFrame]], track_name: str) -> List[Dict[str, pd.DataFrame]]:
     target_track = canonical_track_name(track_name)
-    kept = [frames for frames in (existing_frames or []) if frame_track_name(frames) != target_track]
+    target_programs = {frame_program_name(frames) for frames in (new_frames or [])}
+    kept = [
+        frames for frames in (existing_frames or [])
+        if frame_track_name(frames) != target_track or frame_program_name(frames) not in target_programs
+    ]
     merged = kept + (new_frames or [])
     return add_region_to_frames(merged)
 
@@ -2897,6 +2908,27 @@ def apply_api_sla_thresholds(df: pd.DataFrame) -> pd.DataFrame:
     return work
 
 
+def is_cx_ai_assistant_frame(frames: Dict[str, pd.DataFrame]) -> bool:
+    info = frames.get("Run_Info")
+    info_row = info.iloc[0].to_dict() if info is not None and not info.empty else {}
+    program = str(info_row.get("Program") or infer_program_track(frames.get("Label", ""))[0])
+    label = str(frames.get("Label", ""))
+    normalized = re.sub(r"[^A-Z0-9]", "", f"{program} {label}".upper())
+    return "CXAIASSISTANT" in normalized
+
+
+def remove_cx_ai_create_rows_from_frames(frames: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
+    if not is_cx_ai_assistant_frame(frames):
+        return frames
+    cleaned = dict(frames)
+    for key in ["APIs", "Errors"]:
+        df = cleaned.get(key)
+        if df is None or df.empty or "Feature" not in df.columns:
+            continue
+        cleaned[key] = df[~df["Feature"].astype(str).str.strip().str.upper().str.startswith("CREATE")].copy()
+    return cleaned
+
+
 def normalize_sla_for_dashboard_df(df: pd.DataFrame, track_name: str) -> pd.DataFrame:
     track_name = canonical_track_name(track_name)
     if track_name == TRACK_UI:
@@ -2909,8 +2941,8 @@ def normalize_sla_for_dashboard_df(df: pd.DataFrame, track_name: str) -> pd.Data
 def normalize_sla_for_dashboard_frames(run_frames: List[Dict[str, pd.DataFrame]], track_name: str) -> List[Dict[str, pd.DataFrame]]:
     normalized = []
     for frames in run_frames:
-        f = dict(frames)
-        f["APIs"] = normalize_sla_for_dashboard_df(frames.get("APIs", pd.DataFrame()), track_name)
+        f = remove_cx_ai_create_rows_from_frames(dict(frames))
+        f["APIs"] = normalize_sla_for_dashboard_df(f.get("APIs", pd.DataFrame()), track_name)
         normalized.append(f)
     return normalized
 
@@ -2960,6 +2992,7 @@ def sla_color_for_track(track_name: str, metric_value: float) -> float:
 def combined_df(run_frames: List[Dict[str, pd.DataFrame]]) -> pd.DataFrame:
     parts = []
     for frames in run_frames:
+        frames = remove_cx_ai_create_rows_from_frames(frames)
         info = frames.get("Run_Info")
         info_row = info.iloc[0].to_dict() if info is not None and not info.empty else {}
         tmp = frames["APIs"].copy()
@@ -3811,7 +3844,7 @@ def cached_track_summary(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def cached_track_comparison(run_frames: List[Dict[str, pd.DataFrame]]) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    key = dashboard_frames_cache_key(run_frames, "track_comparison")
+    key = dashboard_frames_cache_key(run_frames, f"track_comparison:{st.session_state.get('active_program', PROGRAM_SAAS)}")
     cache = st.session_state.setdefault("_dashboard_calc_cache", {})
     if key not in cache:
         cache[key] = build_dashboard_track_comparison(run_frames)
@@ -3873,6 +3906,7 @@ def build_dashboard_track_comparison(run_frames: List[Dict[str, pd.DataFrame]]) 
 
     metric_source_frames = []
     for frames in run_frames:
+        frames = remove_cx_ai_create_rows_from_frames(frames)
         info = frames.get("Run_Info")
         info_row = info.iloc[0].to_dict() if info is not None and not info.empty else {}
         frame_track = canonical_track_name(info_row.get("Track") or infer_program_track(frames.get("Label", ""))[1])
@@ -3945,9 +3979,13 @@ def build_dashboard_track_comparison(run_frames: List[Dict[str, pd.DataFrame]]) 
 
         return pd.DataFrame(rows)
 
+    active_program = st.session_state.get("active_program", PROGRAM_SAAS)
+    cx_ai_active = str(active_program) == PROGRAM_CX_AI_ASSISTANT
     askai_tracks = [t for t in other_tracks if "ASKAI" in str(t).upper().replace(" ", "")]
-    api_tracks = [t for t in other_tracks if t not in askai_tracks]
-    return build_section(askai_tracks, True), build_section(api_tracks, False)
+    cx_ai_tracks = other_tracks if cx_ai_active else []
+    api_tracks = [t for t in other_tracks if t not in askai_tracks and t not in cx_ai_tracks]
+    askai_like_tracks = list(dict.fromkeys(askai_tracks + cx_ai_tracks))
+    return build_section(askai_like_tracks, True), build_section(api_tracks, False)
 
 
 def display_track_comparison_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -4083,8 +4121,9 @@ def render_track_comparison_dashboard(run_frames: List[Dict[str, pd.DataFrame]])
     if askai_df.empty and other_df.empty:
         return
 
+    askai_title = "CX AI Assistant Track Comparison" if st.session_state.get("active_program") == PROGRAM_CX_AI_ASSISTANT else "AskAI Track Comparison"
     st.markdown('<div class="panel-title" style="margin-top:12px;">TRACK COMPARISON DASHBOARD</div>', unsafe_allow_html=True)
-    render_section("AskAI Track Comparison", askai_df, 320)
+    render_section(askai_title, askai_df, 320)
     render_section("Track Comparison", other_df, 380)
 
 
@@ -4184,7 +4223,8 @@ def render_compare_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> None:
     askai_df, other_df = cached_track_comparison(run_frames)
 
     if not askai_df.empty:
-        st.markdown('<div class="dashboard-subtitle">AskAI Track Comparison</div>', unsafe_allow_html=True)
+        askai_title = "CX AI Assistant Track Comparison" if st.session_state.get("active_program") == PROGRAM_CX_AI_ASSISTANT else "AskAI Track Comparison"
+        st.markdown(f'<div class="dashboard-subtitle">{askai_title}</div>', unsafe_allow_html=True)
         askai_html = track_comparison_matrix_html(askai_df)
         if askai_html:
             st.markdown(askai_html, unsafe_allow_html=True)
@@ -4453,7 +4493,7 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
         st.session_state.pop("dashboard_dropdown", None)
 
     active_program = st.session_state.get("active_program") or params.get("program", "") or PROGRAM_SAAS
-    program_values = [PROGRAM_SAAS, "Cisco IQ Onprem - Assets", "Cisco IQ Onprem - Risk App", "CX AI Assistant", "AI Framework"]
+    program_values = [PROGRAM_SAAS, "Cisco IQ Onprem - Assets", "Cisco IQ Onprem - Risk App", PROGRAM_CX_AI_ASSISTANT, "AI Framework"]
     if active_program not in program_values:
         active_program = PROGRAM_SAAS
     st.session_state["active_program"] = active_program
@@ -4544,7 +4584,7 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
     active_program = st.session_state.get("active_program", active_program)
     active_track = st.session_state.get("active_track", active_track)
 
-    if active_program != PROGRAM_SAAS:
+    if active_program not in {PROGRAM_SAAS, PROGRAM_CX_AI_ASSISTANT}:
         with st.container(border=True):
             st.markdown('<div class="panel-title">Coming Soon</div>', unsafe_allow_html=True)
             st.info(f"{active_program} is planned for Q4FY26. Dashboard enablement is in upcoming release windows.")
@@ -5313,7 +5353,7 @@ def normalize_saved_uploads(existing: List[Dict[str, str]]) -> List[Dict[str, st
         file_hash = item.get("file_hash", "")
 
         program_name = item.get("program") or infer_program_track(file_name)[0]
-        if program_name != PROGRAM_SAAS:
+        if program_name not in {PROGRAM_SAAS, PROGRAM_CX_AI_ASSISTANT}:
             to_remove.append(item)
             continue
 
@@ -5379,7 +5419,8 @@ def save_uploaded_files_to_latest(uploaded_files) -> None:
 
     for uploaded_file in uploaded_files:
         original_name = Path(uploaded_file.name).name.replace(" ", "_")
-        clean_name = build_standard_report_name(TRACK_API, PROGRAM_SAAS, original_name, ".json")
+        inferred_program, _ = infer_program_track(original_name)
+        clean_name = build_standard_report_name(TRACK_API, inferred_program, original_name, ".json")
         file_bytes = uploaded_file.getvalue()
         file_hash = hashlib.sha256(file_bytes).hexdigest()
 
@@ -6342,10 +6383,15 @@ def load_static_saved_dashboard() -> bool:
 
 
 
-def dashboard_url_for_run(run_id_value: str) -> str:
+def dashboard_url_for_run(run_id_value: str, program: str = "", track: str = "") -> str:
+    query = {"view": "dashboard"}
     if run_id_value:
-        return f"?view=dashboard&run_id={run_id_value}"
-    return "?view=dashboard"
+        query["run_id"] = run_id_value
+    if program:
+        query["program"] = program
+    if track:
+        query["track"] = track
+    return "?" + urlencode(query)
 
 
 def render_floating_chatbot_icon() -> None:
@@ -6560,9 +6606,15 @@ elif team_upload_view:
                     st.session_state.excel_api_only = True
                     st.session_state.messages = []
                     st.session_state.run_id = new_run_id
+                    uploaded_programs = {frame_program_name(frames) for frames in run_frames}
+                    active_program_for_upload = PROGRAM_CX_AI_ASSISTANT if uploaded_programs == {PROGRAM_CX_AI_ASSISTANT} else PROGRAM_SAAS
+                    st.session_state["active_program"] = active_program_for_upload
+                    st.session_state["active_track"] = TRACK_API
+                    st.session_state["dashboard_tab"] = "Overview"
                     st.toast("Report generated successfully.", icon="✅")
                     st.success("Dashboard generated. Share the dashboard link below with management.")
-                    st.markdown(f'<a class="primary-pill" href="{dashboard_url_for_run(new_run_id)}" target="_blank">Open Results Dashboard ↗</a>', unsafe_allow_html=True)
+                    dashboard_link = dashboard_url_for_run(new_run_id, program=active_program_for_upload, track=TRACK_API)
+                    st.markdown(f'<a class="primary-pill" href="{dashboard_link}" target="_blank">Open Results Dashboard ↗</a>', unsafe_allow_html=True)
                     st.info("Dashboard, Excel Report, and AI Chatbot are now available from the left panel.")
                 except Exception as exc:
                     st.error(f"Failed to generate report: {exc}")
