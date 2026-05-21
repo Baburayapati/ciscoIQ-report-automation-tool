@@ -3694,7 +3694,7 @@ def cloud_overview_detail_df(run_frames: List[Dict[str, pd.DataFrame]], fallback
         display = fallback_df.copy()
     remove_cols = {
         "Feature", "Scenario", "Endpoint", "API", "sampleCount", "errorCount", "errorPct",
-        "SLA Breach Hours", "Track Type", "Track Name", "Customer Name", "Customer", "SLA Breach Sec", "Program", "Region",
+        "SLA Breach Hours", "Track Type", "Track Name", "SLA Breach Sec", "Program", "Region",
         "SLA Hours", "Avg ResTime in hours", "Min ResTime in hours", "MaxRes Time in hours",
         "Avg ResTime in sec", "Min ResTime in sec", "MaxRes Time in sec", "SLA Sec",
     }
@@ -3707,6 +3707,13 @@ def cloud_overview_detail_df(run_frames: List[Dict[str, pd.DataFrame]], fallback
     }
     display = display.rename(columns={old: new for old, new in rename_cols.items() if old in display.columns})
     ordered_cols = list(display.columns)
+    customer_col = next((col for col in ordered_cols if re.search(r"customer.*name|^customer$", str(col), re.IGNORECASE)), None)
+    if customer_col:
+        ordered_cols = [customer_col] + [col for col in ordered_cols if col != customer_col]
+    if "SLA Target" in ordered_cols:
+        ordered_cols = [col for col in ordered_cols if col != "SLA Target"]
+        insert_at = ordered_cols.index("Run") + 1 if "Run" in ordered_cols else 1 if customer_col else 0
+        ordered_cols.insert(insert_at, "SLA Target")
     if "SLA Status" in ordered_cols:
         ordered_cols = [col for col in ordered_cols if col != "SLA Status"] + ["SLA Status"]
     display = display[ordered_cols]
