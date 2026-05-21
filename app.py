@@ -3679,6 +3679,34 @@ def cloud_raw_display_df(run_frames: List[Dict[str, pd.DataFrame]]) -> pd.DataFr
     return display
 
 
+def cloud_raw_original_df(run_frames: List[Dict[str, pd.DataFrame]]) -> pd.DataFrame:
+    raw = combined_raw_df(run_frames, "Cloud_Raw")
+    if raw.empty:
+        return raw
+    original = raw.copy()
+    original.columns = [clean_cloud_column_name(col) for col in original.columns]
+    return original
+
+
+def cloud_overview_detail_df(run_frames: List[Dict[str, pd.DataFrame]], fallback_df: pd.DataFrame) -> pd.DataFrame:
+    display = cloud_raw_display_df(run_frames)
+    if display.empty:
+        display = fallback_df.copy()
+    remove_cols = {
+        "Feature", "Scenario", "Endpoint", "API", "sampleCount", "errorCount", "errorPct",
+        "SLA Breach Hours", "Track Type", "Customer Name", "SLA Breach Sec",
+    }
+    display = display.drop(columns=[col for col in remove_cols if col in display.columns], errors="ignore")
+    rename_cols = {
+        "Avg ResTime in sec": "Avg ResTime in hours",
+        "Min ResTime in sec": "Min ResTime in hours",
+        "MaxRes Time in sec": "MaxRes Time in hours",
+        "SLA Sec": "SLA Hours",
+    }
+    display = display.rename(columns={old: new for old, new in rename_cols.items() if old in display.columns})
+    return display
+
+
 def cloud_hour_columns(df: pd.DataFrame) -> List[str]:
     return [col for col in df.columns if str(col).endswith("(hours)")]
 
@@ -3794,7 +3822,7 @@ def render_cloud_assist_dashboard(run_frames: List[Dict[str, pd.DataFrame]], com
 
     with st.container(border=True):
         st.markdown('<div class="panel-title">Cloud Assist Detailed Metrics</div>', unsafe_allow_html=True)
-        detail_df = display_raw if not display_raw.empty else chart_df
+        detail_df = cloud_overview_detail_df(run_frames, chart_df)
         st.dataframe(highlight_cloud_sla_cells(detail_df), use_container_width=True, hide_index=True, height=min(620, 78 + 34 * len(detail_df)))
 
 
@@ -4540,11 +4568,11 @@ def render_detailed_report_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
     df = combined_df(run_frames)
     st.markdown('<div class="panel"><div class="panel-title">DETAILED REPORT</div>', unsafe_allow_html=True)
     if st.session_state.get("active_track") == TRACK_CLOUD:
-        cloud_df = cloud_raw_display_df(run_frames)
+        cloud_df = cloud_raw_original_df(run_frames)
         if cloud_df.empty:
             st.info("No Cloud Assist Connector metrics available.")
         else:
-            st.dataframe(highlight_cloud_sla_cells(cloud_df), use_container_width=True, hide_index=True, height=min(760, 78 + 30 * len(cloud_df)))
+            st.dataframe(cloud_df, use_container_width=True, hide_index=True, height=min(760, 78 + 30 * len(cloud_df)))
         st.markdown("</div>", unsafe_allow_html=True)
         return
     if st.session_state.get("active_track") == TRACK_UI:
@@ -4699,6 +4727,11 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
 
     tracks_html = ["API", "UI", "Cloud Assist Connector", "Customer Inventory Benchmarking"]
     tabs_html = ["Overview", "Track Comparison", "Detailed Report", "Test Cases Details", "Defect details"]
+    if active_track == TRACK_CLOUD:
+        tabs_html = [tab for tab in tabs_html if tab != "Track Comparison"]
+        if selected_tab == "Track Comparison":
+            selected_tab = "Overview"
+            st.session_state["dashboard_tab"] = selected_tab
 
     region_values = sorted({
         str(frames.get("Region", region_from_frames(frames)))
