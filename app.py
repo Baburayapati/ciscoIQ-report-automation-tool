@@ -3694,7 +3694,9 @@ def cloud_overview_detail_df(run_frames: List[Dict[str, pd.DataFrame]], fallback
         display = fallback_df.copy()
     remove_cols = {
         "Feature", "Scenario", "Endpoint", "API", "sampleCount", "errorCount", "errorPct",
-        "SLA Breach Hours", "Track Type", "Customer Name", "SLA Breach Sec",
+        "SLA Breach Hours", "Track Type", "Track Name", "SLA Breach Sec", "Program", "Region",
+        "SLA Hours", "Avg ResTime in hours", "Min ResTime in hours", "MaxRes Time in hours",
+        "Avg ResTime in sec", "Min ResTime in sec", "MaxRes Time in sec", "SLA Sec",
     }
     display = display.drop(columns=[col for col in remove_cols if col in display.columns], errors="ignore")
     rename_cols = {
@@ -3704,6 +3706,13 @@ def cloud_overview_detail_df(run_frames: List[Dict[str, pd.DataFrame]], fallback
         "SLA Sec": "SLA Hours",
     }
     display = display.rename(columns={old: new for old, new in rename_cols.items() if old in display.columns})
+    ordered_cols = list(display.columns)
+    customer_col = next((col for col in ordered_cols if re.search(r"customer.*name|^customer$", str(col), re.IGNORECASE)), None)
+    if customer_col:
+        ordered_cols = [customer_col] + [col for col in ordered_cols if col != customer_col]
+    if "SLA Status" in ordered_cols:
+        ordered_cols = [col for col in ordered_cols if col != "SLA Status"] + ["SLA Status"]
+    display = display[ordered_cols]
     return display
 
 
