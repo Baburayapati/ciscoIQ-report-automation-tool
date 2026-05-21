@@ -3506,6 +3506,16 @@ body {{
     height:24px;
     margin-top:9px;
 }}
+.health-score-note {{
+    margin:8px 16px 0 16px;
+    padding:8px 10px;
+    border:1px solid #dbe4f0;
+    border-radius:10px;
+    background:#f8fafc;
+    color:#344256;
+    font-size:12px;
+    font-weight:750;
+}}
 @media(max-width:1100px){{
   .agg-kpi-row {{ grid-template-columns: repeat(2, 1fr); }}
   .agg-kpi:nth-child(2n){{border-right:none;}}
@@ -3540,6 +3550,7 @@ body {{
     {extra_cards}
 
   </div>
+  {'<div class="health-score-note">Health Score = SLA Pass % minus sample error rate %, bounded between 0 and 100.</div>' if show_health else ''}
 </div>
 </body>
 </html>
@@ -4771,7 +4782,7 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
         active_program = PROGRAM_SAAS
     st.session_state["active_program"] = active_program
 
-    active_track = st.session_state.get("active_track") or params.get("track", "") or "API"
+    active_track = params.get("track", "") or st.session_state.get("active_track") or "API"
     active_track = canonical_track_name(active_track)
     track_values = ["API", "UI", "Cloud Assist Connector", "Customer Inventory Benchmarking"]
     if active_track not in track_values:
@@ -6910,6 +6921,7 @@ def dashboard_url_for_run(run_id_value: str, program: str = "", track: str = "")
     query = {"view": "dashboard"}
     if run_id_value:
         query["run_id"] = run_id_value
+    query["tab"] = "Overview"
     if program:
         query["program"] = program
     if track:
