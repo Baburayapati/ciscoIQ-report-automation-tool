@@ -237,7 +237,7 @@ div[role="radiogroup"] label:has(input:checked) {
     color:white;
     padding:9px 18px;
     border-radius:12px 12px 12px 0;
-    font-size:15px;
+    font-size:14px;
     font-weight:900;
     letter-spacing:.2px;
     margin:0 0 8px 0;
@@ -265,7 +265,7 @@ div[role="radiogroup"] label:has(input:checked) {
     color:#ffffff;
     padding:9px 18px;
     border-radius:0 0 14px 0;
-    font-size:15px;
+    font-size:14px;
     font-weight:900;
     letter-spacing:.2px;
     margin:0 0 8px 0;
@@ -4756,7 +4756,7 @@ def goto_tab_button(label: str, tab_name: str, key: str) -> None:
 def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> None:
     # Fast in-app navigation with screenshot-like layout.
     st.markdown(
-        '<h1 style="text-align:center;color:#123274;font-weight:900;margin:8px 0 22px 0;letter-spacing:.2px;">Performance Results Dashboard</h1>',
+        '<h1 style="text-align:center;color:#123274;font-size:30px;font-weight:900;margin:8px 0 22px 0;letter-spacing:.2px;">Performance Results Dashboard</h1>',
         unsafe_allow_html=True,
     )
     current_run_id = params.get("run_id", "") or st.session_state.get("run_id", "")
