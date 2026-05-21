@@ -60,6 +60,7 @@ NON_API_LATENCY_SLA_SEC = {
     TRACK_INVENTORY: 2.0,
 }
 CLOUD_E2E_SLA_HOURS = 24.0
+INVENTORY_E2E_SLA_HOURS = 24.0
 
 st.set_page_config(page_title=APP_TITLE, layout="wide", initial_sidebar_state="expanded")
 
@@ -3651,11 +3652,18 @@ def clean_cloud_column_name(col: object) -> str:
 
 def cloud_mins_to_hours_name(col: object) -> str:
     name = clean_cloud_column_name(col)
-    return re.sub(r"(?i)_mins\s*$", " (hours)", name)
+    name = re.sub(r"(?i)_mins\s*$", " (hours)", name)
+    name = re.sub(r"(?i)\bmin\b", "hours", name)
+    return name
 
 
-def cloud_raw_display_df(run_frames: List[Dict[str, pd.DataFrame]]) -> pd.DataFrame:
-    raw = combined_raw_df(run_frames, "Cloud_Raw")
+def is_minutes_column(col: object) -> bool:
+    name = clean_cloud_column_name(col)
+    return bool(re.search(r"(?i)(_mins\s*$|\bmin\b|duration|overall time|DI \+ IBES|data fabric etl)", name))
+
+
+def backend_raw_display_df(run_frames: List[Dict[str, pd.DataFrame]], raw_key: str, sla_patterns: List[str], sla_hours: float) -> pd.DataFrame:
+    raw = combined_raw_df(run_frames, raw_key)
     if raw.empty:
         return raw
 
@@ -3663,29 +3671,46 @@ def cloud_raw_display_df(run_frames: List[Dict[str, pd.DataFrame]]) -> pd.DataFr
     display.columns = [clean_cloud_column_name(col) for col in display.columns]
     for col in list(display.columns):
         clean_col = clean_cloud_column_name(col)
-        if re.search(r"(?i)_mins\s*$", clean_col):
+        if is_minutes_column(clean_col) and pd.to_numeric(display[col], errors="coerce").notna().any():
             new_col = cloud_mins_to_hours_name(clean_col)
             display[new_col] = (pd.to_numeric(display[col], errors="coerce") / 60.0).round(3)
             display = display.drop(columns=[col])
 
-    customer_col = pick_first_matching_column(display, [r"customer.*name", r"customer"])
+    customer_col = pick_first_matching_column(display, [r"customer.*name", r"^customer$", r"customer"])
     if customer_col and "Track Name" not in display.columns:
         display.insert(0, "Track Name", display[customer_col].astype(str))
-    if "E2E Total time (Overall IBES+ Data Fabric til PG) (hours)" in display.columns:
-        e2e = pd.to_numeric(display["E2E Total time (Overall IBES+ Data Fabric til PG) (hours)"], errors="coerce")
-        display["SLA Target"] = "< 24h"
-        display["SLA Status"] = (e2e < CLOUD_E2E_SLA_HOURS).map({True: "PASS", False: "FAIL"})
-        display["SLA Breach Hours"] = (e2e - CLOUD_E2E_SLA_HOURS).clip(lower=0).round(3)
+    sla_col = pick_first_matching_column(display, sla_patterns)
+    if sla_col:
+        e2e = pd.to_numeric(display[sla_col], errors="coerce")
+        display["SLA Target"] = f"< {int(sla_hours)}h"
+        display["SLA Status"] = (e2e < sla_hours).map({True: "PASS", False: "FAIL"})
+        display["SLA Breach Hours"] = (e2e - sla_hours).clip(lower=0).round(3)
     return display
 
 
-def cloud_raw_original_df(run_frames: List[Dict[str, pd.DataFrame]]) -> pd.DataFrame:
-    raw = combined_raw_df(run_frames, "Cloud_Raw")
+def backend_raw_original_df(run_frames: List[Dict[str, pd.DataFrame]], raw_key: str) -> pd.DataFrame:
+    raw = combined_raw_df(run_frames, raw_key)
     if raw.empty:
         return raw
     original = raw.copy()
     original.columns = [clean_cloud_column_name(col) for col in original.columns]
     return original
+
+
+def cloud_raw_display_df(run_frames: List[Dict[str, pd.DataFrame]]) -> pd.DataFrame:
+    return backend_raw_display_df(run_frames, "Cloud_Raw", [r"e2e.*total.*time.*hours", r"overall.*ibes.*data.*fabric.*hours", r"data.*fabric.*pg.*hours"], CLOUD_E2E_SLA_HOURS)
+
+
+def cloud_raw_original_df(run_frames: List[Dict[str, pd.DataFrame]]) -> pd.DataFrame:
+    return backend_raw_original_df(run_frames, "Cloud_Raw")
+
+
+def inventory_raw_display_df(run_frames: List[Dict[str, pd.DataFrame]]) -> pd.DataFrame:
+    return backend_raw_display_df(run_frames, "Inventory_Raw", [r"overall.*time.*hours"], INVENTORY_E2E_SLA_HOURS)
+
+
+def inventory_raw_original_df(run_frames: List[Dict[str, pd.DataFrame]]) -> pd.DataFrame:
+    return backend_raw_original_df(run_frames, "Inventory_Raw")
 
 
 def cloud_overview_detail_df(run_frames: List[Dict[str, pd.DataFrame]], fallback_df: pd.DataFrame) -> pd.DataFrame:
@@ -3745,11 +3770,11 @@ def highlight_cloud_sla_cells(df: pd.DataFrame):
     return df.style.apply(lambda row: [style_cell(row[col], col) for col in df.columns], axis=1)
 
 
-def render_cloud_assist_dashboard(run_frames: List[Dict[str, pd.DataFrame]], comparison_mode: bool = False) -> None:
+def render_backend_csv_dashboard(run_frames: List[Dict[str, pd.DataFrame]], raw_key: str, title: str, sla_patterns: List[str], sla_hours: float, metric_label: str) -> None:
     df = cached_combined_df(run_frames)
-    display_raw = cloud_raw_display_df(run_frames)
+    display_raw = backend_raw_display_df(run_frames, raw_key, sla_patterns, sla_hours)
     if df.empty:
-        st.info("No Cloud Assist Connector metrics available.")
+        st.info(f"No {title} metrics available.")
         return
 
     total = len(df)
@@ -3760,7 +3785,7 @@ def render_cloud_assist_dashboard(run_frames: List[Dict[str, pd.DataFrame]], com
 
     c1, c2, c3, c4 = st.columns(4, gap="medium")
     c1.metric("Customers", f"{total:,}")
-    c2.metric("SLA Target", "< 24h")
+    c2.metric("SLA Target", f"< {int(sla_hours)}h")
     c3.metric("SLA Pass", f"{pass_count:,}")
     c4.metric("SLA Fail", f"{fail_count:,}")
 
@@ -3772,7 +3797,7 @@ def render_cloud_assist_dashboard(run_frames: List[Dict[str, pd.DataFrame]], com
     chart_df["E2E Total Hours"] = pd.to_numeric(chart_df.get("E2E Total Hours", chart_df.get("Avg ResTime in sec", 0)), errors="coerce").fillna(0)
     chart_df["Customer"] = chart_df.get("Customer Name", chart_df.get("Scenario", "Customer")).astype(str)
     chart_df["Devices"] = chart_df.get("Devices", chart_df.get("Endpoint", "N/A")).astype(str)
-    chart_df["SLA Target"] = "< 24h"
+    chart_df["SLA Target"] = f"< {int(sla_hours)}h"
     chart_df["SLA Breach Hours"] = pd.to_numeric(chart_df.get("SLA Breach Sec", 0), errors="coerce").fillna(0)
 
     if not display_raw.empty:
@@ -3789,7 +3814,7 @@ def render_cloud_assist_dashboard(run_frames: List[Dict[str, pd.DataFrame]], com
                 summary_rows.append({"Metric": col, "Avg Hours": round(float(vals.mean()), 3), "Min Hours": round(float(vals.min()), 3), "Max Hours": round(float(vals.max()), 3)})
             if summary_rows:
                 with st.container(border=True):
-                    st.markdown('<div class="panel-title">Overview Summary - Backend Metrics (Hours)</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="panel-title">Overview Summary - {title} Metrics (Hours)</div>', unsafe_allow_html=True)
                     summary_df = pd.DataFrame(summary_rows)
                     st.dataframe(highlight_cloud_sla_cells(summary_df), use_container_width=True, hide_index=True, height=min(420, 78 + 34 * len(summary_df)))
 
@@ -3799,7 +3824,7 @@ def render_cloud_assist_dashboard(run_frames: List[Dict[str, pd.DataFrame]], com
             with st.container(border=True):
                 st.markdown('<div class="panel-title">All Duration Metrics by Track Name</div>', unsafe_allow_html=True)
                 fig = px.bar(hour_long, x=track_col, y="Hours", color="Metric", barmode="group", text="Hours")
-                fig.add_hline(y=CLOUD_E2E_SLA_HOURS, line_dash="dash", line_color="#ef4444", annotation_text="24h SLA")
+                fig.add_hline(y=sla_hours, line_dash="dash", line_color="#ef4444", annotation_text=f"{int(sla_hours)}h SLA")
                 fig.update_traces(texttemplate="%{text:.2f}h", textposition="outside")
                 fig.update_layout(height=520, margin=dict(l=8, r=10, t=5, b=135), xaxis_title="Track Name", yaxis_title="Hours")
                 st.plotly_chart(fig, use_container_width=True)
@@ -3822,9 +3847,9 @@ def render_cloud_assist_dashboard(run_frames: List[Dict[str, pd.DataFrame]], com
     left, right = st.columns([1.45, 1], gap="medium")
     with left:
         with st.container(border=True):
-            st.markdown('<div class="panel-title">E2E Total Time by Customer</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="panel-title">{metric_label} by Customer</div>', unsafe_allow_html=True)
             fig = px.bar(chart_df.sort_values("E2E Total Hours"), x="Customer", y="E2E Total Hours", color="SLA Status", text="E2E Total Hours", color_discrete_map={"PASS": "#2ca02c", "FAIL": "#ef4444"})
-            fig.add_hline(y=CLOUD_E2E_SLA_HOURS, line_dash="dash", line_color="#ef4444", annotation_text="24h SLA")
+            fig.add_hline(y=sla_hours, line_dash="dash", line_color="#ef4444", annotation_text=f"{int(sla_hours)}h SLA")
             fig.update_traces(texttemplate="%{text:.2f}h", textposition="outside")
             fig.update_layout(height=390, margin=dict(l=8, r=10, t=5, b=120), xaxis_title="", yaxis_title="Hours")
             st.plotly_chart(fig, use_container_width=True)
@@ -3832,6 +3857,28 @@ def render_cloud_assist_dashboard(run_frames: List[Dict[str, pd.DataFrame]], com
         with st.container(border=True):
             st.markdown('<div class="panel-title">SLA Status</div>', unsafe_allow_html=True)
             st.plotly_chart(sla_donut(df), use_container_width=True)
+
+
+def render_cloud_assist_dashboard(run_frames: List[Dict[str, pd.DataFrame]], comparison_mode: bool = False) -> None:
+    render_backend_csv_dashboard(
+        run_frames,
+        "Cloud_Raw",
+        "Cloud Assist Connector",
+        [r"e2e.*total.*time.*hours", r"overall.*ibes.*data.*fabric.*hours", r"data.*fabric.*pg.*hours"],
+        CLOUD_E2E_SLA_HOURS,
+        "E2E Total Time",
+    )
+
+
+def render_inventory_benchmark_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> None:
+    render_backend_csv_dashboard(
+        run_frames,
+        "Inventory_Raw",
+        "Customer Inventory Benchmarking",
+        [r"overall.*time.*hours"],
+        INVENTORY_E2E_SLA_HOURS,
+        "Overall Time",
+    )
 
 def get_filtered_frames(run_frames: List[Dict[str, pd.DataFrame]], forced_region: str = "All", forced_track: str = "API") -> List[Dict[str, pd.DataFrame]]:
     def normalize_filter_date(value: str, label: str) -> str:
@@ -4582,6 +4629,14 @@ def render_detailed_report_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
             st.dataframe(cloud_df, use_container_width=True, hide_index=True, height=min(760, 78 + 30 * len(cloud_df)))
         st.markdown("</div>", unsafe_allow_html=True)
         return
+    if st.session_state.get("active_track") == TRACK_INVENTORY:
+        inv_df = inventory_raw_original_df(run_frames)
+        if inv_df.empty:
+            st.info("No Customer Inventory Benchmarking metrics available.")
+        else:
+            st.dataframe(inv_df, use_container_width=True, hide_index=True, height=min(760, 78 + 30 * len(inv_df)))
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
     if st.session_state.get("active_track") == TRACK_UI:
         df = apply_ui_speed_index_sla(df)
         if df.empty:
@@ -4734,7 +4789,7 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
 
     tracks_html = ["API", "UI", "Cloud Assist Connector", "Customer Inventory Benchmarking"]
     tabs_html = ["Overview", "Track Comparison", "Detailed Report", "Test Cases Details", "Defect details"]
-    if active_track == TRACK_CLOUD:
+    if active_track in {TRACK_CLOUD, TRACK_INVENTORY}:
         tabs_html = [tab for tab in tabs_html if tab != "Track Comparison"]
         if selected_tab == "Track Comparison":
             selected_tab = "Overview"
@@ -4843,8 +4898,11 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
             st.warning("No reports match the selected filters. Please update Data & Filters.")
             return
 
-        if active_track == TRACK_CLOUD and selected_tab == "Track Comparison":
-            render_cloud_assist_dashboard(selected_frames)
+        if active_track in {TRACK_CLOUD, TRACK_INVENTORY} and selected_tab == "Track Comparison":
+            if active_track == TRACK_CLOUD:
+                render_cloud_assist_dashboard(selected_frames)
+            else:
+                render_inventory_benchmark_dashboard(selected_frames)
             return
         if selected_tab == "Track Comparison":
             render_compare_tab(selected_frames)
@@ -4866,6 +4924,9 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
         selected_frames_for_sla = normalize_sla_for_dashboard_frames(selected_frames, active_track)
         if active_track == TRACK_CLOUD:
             render_cloud_assist_dashboard(selected_frames_for_sla)
+            return
+        if active_track == TRACK_INVENTORY:
+            render_inventory_benchmark_dashboard(selected_frames_for_sla)
             return
         df = cached_combined_df(selected_frames_for_sla)
         render_aggregated_or_comparison_summary(selected_frames_for_sla)
@@ -5992,6 +6053,51 @@ def build_api_like_df_from_csv(csv_path: Path, track_name: str) -> pd.DataFrame:
             "SLA Sec", "SLA Status", "SLA Breach Sec", "Track Type",
         ])
 
+    if track_name == TRACK_INVENTORY:
+        overall_col = pick_first_matching_column(raw, [r"^overall_time$", r"overall.*time"])
+        status_col = pick_first_matching_column(raw, [r"end.*to.*end.*status", r"status"])
+        customer_col = pick_first_matching_column(raw, [r"customer.*name", r"^customer$", r"customer"])
+        devices_col = pick_first_matching_column(raw, [r"^devices$", r"devices"])
+
+        for idx, row in raw.iterrows():
+            scenario = str(row.get(customer_col) or f"Inventory Customer {idx + 1}").strip()
+            devices = str(row.get(devices_col) or "N/A").strip()
+            overall_minutes = numeric_scalar(row.get(overall_col), 0) if overall_col else 0.0
+            overall_hours = round(overall_minutes / 60.0, 3)
+            status = str(row.get(status_col) or "").strip()
+            pass_status = overall_hours < INVENTORY_E2E_SLA_HOURS
+            error_count = 0 if pass_status else 1
+            rows.append({
+                "Feature": TRACK_INVENTORY,
+                "Scenario": scenario,
+                "Endpoint": devices,
+                "API": f"{TRACK_INVENTORY}/{scenario}/{devices}",
+                "sampleCount": 1,
+                "errorCount": error_count,
+                "errorPct": 0.0 if pass_status else 100.0,
+                "Avg ResTime in sec": overall_hours,
+                "Min ResTime in sec": overall_hours,
+                "MaxRes Time in sec": overall_hours,
+                "SLA Sec": INVENTORY_E2E_SLA_HOURS,
+                "SLA Status": "PASS" if pass_status else "FAIL",
+                "SLA Breach Sec": round(max(overall_hours - INVENTORY_E2E_SLA_HOURS, 0.0), 3),
+                "E2E Total Hours": overall_hours,
+                "SLA Target": "< 24h",
+                "SLA Breach Hours": round(max(overall_hours - INVENTORY_E2E_SLA_HOURS, 0.0), 3),
+                "Track Type": TRACK_INVENTORY,
+                "Customer Name": scenario,
+                "Devices": devices,
+                "E2E Total Minutes": round(overall_minutes, 3),
+                "End-to-End Status": status,
+            })
+
+        df = pd.DataFrame(rows)
+        return df if not df.empty else pd.DataFrame(columns=[
+            "Feature", "Scenario", "Endpoint", "sampleCount", "errorCount", "errorPct",
+            "Avg ResTime in sec", "Min ResTime in sec", "MaxRes Time in sec",
+            "SLA Sec", "SLA Status", "SLA Breach Sec", "Track Type",
+        ])
+
     if track_name == TRACK_UI:
         metric_map = {
             "FCP": [r"\bfcp\b", r"first_contentful_paint"],
@@ -6126,6 +6232,7 @@ def generate_dashboard_from_saved_csv(track_name: str, csv_path: Path, item: Dic
     apis_df = build_api_like_df_from_csv(csv_path, track_name)
     ui_raw_df = pd.DataFrame()
     cloud_raw_df = pd.DataFrame()
+    inventory_raw_df = pd.DataFrame()
     if track_name == TRACK_UI:
         try:
             ui_raw_df = pd.read_csv(csv_path)
@@ -6136,6 +6243,11 @@ def generate_dashboard_from_saved_csv(track_name: str, csv_path: Path, item: Dic
             cloud_raw_df = pd.read_csv(csv_path)
         except Exception:
             cloud_raw_df = pd.DataFrame()
+    elif track_name == TRACK_INVENTORY:
+        try:
+            inventory_raw_df = pd.read_csv(csv_path)
+        except Exception:
+            inventory_raw_df = pd.DataFrame()
     run_info = pd.DataFrame([{
         "Report File": (item or {}).get("file_name", csv_path.name),
         "Concurrent Users": (item or {}).get("users") or inferred.get("users", "N/A"),
@@ -6157,6 +6269,7 @@ def generate_dashboard_from_saved_csv(track_name: str, csv_path: Path, item: Dic
         "APIs": apis_df,
         "UI_Raw": ui_raw_df,
         "Cloud_Raw": cloud_raw_df,
+        "Inventory_Raw": inventory_raw_df,
         "Transactions": pd.DataFrame(),
         "Errors": apis_df[apis_df.get("errorCount", 0) > 0].copy() if not apis_df.empty else pd.DataFrame(),
         "Run_Info": run_info,
@@ -6189,6 +6302,7 @@ def generate_dashboard_from_uploaded_csv_files(track_name: str, uploaded_files) 
         apis_df = build_api_like_df_from_csv(temp_path, track_name)
         ui_raw_df = pd.DataFrame()
         cloud_raw_df = pd.DataFrame()
+        inventory_raw_df = pd.DataFrame()
         if track_name == TRACK_UI:
             try:
                 ui_raw_df = pd.read_csv(temp_path)
@@ -6199,6 +6313,11 @@ def generate_dashboard_from_uploaded_csv_files(track_name: str, uploaded_files) 
                 cloud_raw_df = pd.read_csv(temp_path)
             except Exception:
                 cloud_raw_df = pd.DataFrame()
+        elif track_name == TRACK_INVENTORY:
+            try:
+                inventory_raw_df = pd.read_csv(temp_path)
+            except Exception:
+                inventory_raw_df = pd.DataFrame()
         run_info = pd.DataFrame([{
             "Report File": uploaded_file.name,
             "Concurrent Users": inferred.get("users", "N/A"),
@@ -6219,6 +6338,7 @@ def generate_dashboard_from_uploaded_csv_files(track_name: str, uploaded_files) 
             "APIs": apis_df,
             "UI_Raw": ui_raw_df,
             "Cloud_Raw": cloud_raw_df,
+            "Inventory_Raw": inventory_raw_df,
             "Transactions": pd.DataFrame(),
             "Errors": apis_df[apis_df.get("errorCount", 0) > 0].copy() if not apis_df.empty else pd.DataFrame(),
             "Run_Info": run_info,
@@ -6704,6 +6824,7 @@ def load_saved_dashboard_frames() -> List[Dict[str, pd.DataFrame]]:
                 apis_df = build_api_like_df_from_csv(path, track_name)
                 ui_raw_df = pd.DataFrame()
                 cloud_raw_df = pd.DataFrame()
+                inventory_raw_df = pd.DataFrame()
                 if track_name == TRACK_UI:
                     try:
                         ui_raw_df = pd.read_csv(path)
@@ -6714,6 +6835,11 @@ def load_saved_dashboard_frames() -> List[Dict[str, pd.DataFrame]]:
                         cloud_raw_df = pd.read_csv(path)
                     except Exception:
                         cloud_raw_df = pd.DataFrame()
+                elif track_name == TRACK_INVENTORY:
+                    try:
+                        inventory_raw_df = pd.read_csv(path)
+                    except Exception:
+                        inventory_raw_df = pd.DataFrame()
                 run_info = pd.DataFrame([{
                     "Report File": file_name,
                     "Concurrent Users": item.get("users") or inferred.get("users", "N/A"),
@@ -6734,6 +6860,7 @@ def load_saved_dashboard_frames() -> List[Dict[str, pd.DataFrame]]:
                     "APIs": apis_df,
                     "UI_Raw": ui_raw_df,
                     "Cloud_Raw": cloud_raw_df,
+                    "Inventory_Raw": inventory_raw_df,
                     "Transactions": pd.DataFrame(),
                     "Errors": apis_df[apis_df.get("errorCount", 0) > 0].copy() if not apis_df.empty else pd.DataFrame(),
                     "Run_Info": run_info,
