@@ -55,6 +55,7 @@ NON_API_LATENCY_SLA_SEC = {
     TRACK_CLOUD: 2.0,
     TRACK_INVENTORY: 2.0,
 }
+CLOUD_E2E_SLA_HOURS = 24.0
 
 st.set_page_config(page_title=APP_TITLE, layout="wide", initial_sidebar_state="expanded")
 
@@ -3523,7 +3524,7 @@ def build_run_summary_table(run_frames: List[Dict[str, pd.DataFrame]], include_h
 
 def render_aggregated_or_comparison_summary(run_frames: List[Dict[str, pd.DataFrame]]) -> None:
     active_track = canonical_track_name(st.session_state.get("active_track") or params.get("track", "") or TRACK_API)
-    hide_health = active_track == TRACK_UI
+    hide_health = active_track in {TRACK_UI, TRACK_CLOUD}
     scoped_frames = normalize_sla_for_dashboard_frames(run_frames, active_track)
 
     if len(run_frames) <= 1:
@@ -3585,6 +3586,150 @@ def sla_donut(df: pd.DataFrame):
         )],
     )
     return fig
+
+
+def combined_raw_df(run_frames: List[Dict[str, pd.DataFrame]], raw_key: str) -> pd.DataFrame:
+    parts = []
+    for frames in run_frames:
+        raw = frames.get(raw_key)
+        if raw is None or raw.empty:
+            continue
+        tmp = raw.copy()
+        tmp["Run"] = frames.get("Label", "Run")
+        tmp["Region"] = frames.get("Region", region_from_frames(frames))
+        parts.append(tmp)
+    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+
+
+def render_cloud_assist_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> None:
+    df = cached_combined_df(run_frames)
+    raw = combined_raw_df(run_frames, "Cloud_Raw")
+    if df.empty:
+        st.info("No Cloud Assist Connector metrics available.")
+        return
+
+    total = len(df)
+    pass_count = int((df.get("SLA Status", pd.Series(dtype=str)) == "PASS").sum())
+    fail_count = int((df.get("SLA Status", pd.Series(dtype=str)) == "FAIL").sum())
+    avg_hours = float(pd.to_numeric(df.get("E2E Total Hours", df.get("Avg ResTime in sec", 0)), errors="coerce").fillna(0).mean())
+    max_hours = float(pd.to_numeric(df.get("E2E Total Hours", df.get("MaxRes Time in sec", 0)), errors="coerce").fillna(0).max())
+
+    c1, c2, c3, c4 = st.columns(4, gap="medium")
+    c1.metric("Customers", f"{total:,}")
+    c2.metric("SLA Target", "< 24h")
+    c3.metric("SLA Pass", f"{pass_count:,}")
+    c4.metric("SLA Fail", f"{fail_count:,}")
+
+    c5, c6 = st.columns(2, gap="medium")
+    c5.metric("Avg E2E Hours", f"{avg_hours:.2f}h")
+    c6.metric("Max E2E Hours", f"{max_hours:.2f}h")
+
+    chart_df = df.copy()
+    chart_df["E2E Total Hours"] = pd.to_numeric(chart_df.get("E2E Total Hours", chart_df.get("Avg ResTime in sec", 0)), errors="coerce").fillna(0)
+    chart_df["Customer"] = chart_df.get("Customer Name", chart_df.get("Scenario", "Customer")).astype(str)
+    chart_df["Devices"] = chart_df.get("Devices", chart_df.get("Endpoint", "N/A")).astype(str)
+    chart_df["SLA Target"] = "< 24h"
+    chart_df["SLA Breach Hours"] = pd.to_numeric(chart_df.get("SLA Breach Sec", 0), errors="coerce").fillna(0)
+
+    if not raw.empty:
+        customer_col = pick_first_matching_column(raw, [r"customer.*name", r"customer"])
+        devices_col = pick_first_matching_column(raw, [r"^devices$", r"devices"])
+        e2e_col = pick_first_matching_column(raw, [r"e2e.*total.*time", r"overall.*ibes.*data.*fabric", r"data.*fabric.*pg"])
+        numeric_cols = []
+        for col in raw.columns:
+            if col in {customer_col, devices_col}:
+                continue
+            values = pd.to_numeric(raw[col], errors="coerce")
+            if values.notna().any():
+                numeric_cols.append(col)
+
+        if numeric_cols and customer_col:
+            metric_df = raw[[customer_col] + numeric_cols].copy()
+            metric_display_cols = []
+            for col in numeric_cols:
+                values = pd.to_numeric(metric_df[col], errors="coerce")
+                if str(col).lower().strip().endswith("_mins"):
+                    display_col = str(col).replace("_mins", " (hours)")
+                    metric_df[display_col] = values / 60.0
+                else:
+                    display_col = str(col)
+                    metric_df[display_col] = values
+                metric_display_cols.append(display_col)
+
+            summary_rows = []
+            for col in metric_display_cols:
+                vals = pd.to_numeric(metric_df[col], errors="coerce").dropna()
+                if vals.empty:
+                    continue
+                summary_rows.append({
+                    "Metric": col,
+                    "Avg": round(float(vals.mean()), 3),
+                    "Min": round(float(vals.min()), 3),
+                    "Max": round(float(vals.max()), 3),
+                })
+            if summary_rows:
+                with st.container(border=True):
+                    st.markdown('<div class="panel-title">Overview Summary - Backend Metrics</div>', unsafe_allow_html=True)
+                    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True, height=min(420, 78 + 34 * len(summary_rows)))
+
+            plotted_cols = [col for col in metric_display_cols if col != "S.No"]
+            if plotted_cols:
+                metric_long = metric_df[[customer_col] + plotted_cols].melt(id_vars=customer_col, var_name="Metric", value_name="Value").dropna(subset=["Value"])
+                with st.container(border=True):
+                    st.markdown('<div class="panel-title">All Backend Metrics by Customer</div>', unsafe_allow_html=True)
+                    fig = px.bar(metric_long, x=customer_col, y="Value", color="Metric", barmode="group")
+                    fig.update_layout(height=470, margin=dict(l=8, r=10, t=5, b=125), xaxis_title="", yaxis_title="Value")
+                    st.plotly_chart(fig, use_container_width=True)
+
+    left, right = st.columns([1.45, 1], gap="medium")
+    with left:
+        with st.container(border=True):
+            st.markdown('<div class="panel-title">E2E Total Time by Customer</div>', unsafe_allow_html=True)
+            fig = px.bar(chart_df.sort_values("E2E Total Hours"), x="Customer", y="E2E Total Hours", color="SLA Status", text="E2E Total Hours", color_discrete_map={"PASS": "#2ca02c", "FAIL": "#ef4444"})
+            fig.add_hline(y=CLOUD_E2E_SLA_HOURS, line_dash="dash", line_color="#ef4444", annotation_text="24h SLA")
+            fig.update_traces(texttemplate="%{text:.2f}h", textposition="outside")
+            fig.update_layout(height=390, margin=dict(l=8, r=10, t=5, b=120), xaxis_title="", yaxis_title="Hours")
+            st.plotly_chart(fig, use_container_width=True)
+    with right:
+        with st.container(border=True):
+            st.markdown('<div class="panel-title">SLA Status</div>', unsafe_allow_html=True)
+            st.plotly_chart(sla_donut(df), use_container_width=True)
+
+    if not raw.empty:
+        duration_cols = [col for col in raw.columns if str(col).lower().strip().endswith("_mins")]
+        duration_cols = [col for col in duration_cols if col in raw.columns]
+        customer_col = pick_first_matching_column(raw, [r"customer.*name", r"customer"])
+        if duration_cols and customer_col:
+            long_df = raw[[customer_col] + duration_cols].copy()
+            for col in duration_cols:
+                long_df[col.replace("_mins", "_hours")] = pd.to_numeric(long_df[col], errors="coerce") / 60.0
+            hour_cols = [col.replace("_mins", "_hours") for col in duration_cols]
+            plot_df = long_df[[customer_col] + hour_cols].melt(id_vars=customer_col, var_name="Stage", value_name="Hours")
+            plot_df["Stage"] = plot_df["Stage"].str.replace("_hours", "", regex=False).str.replace("_", " ", regex=False)
+            with st.container(border=True):
+                st.markdown('<div class="panel-title">Backend Stage Durations</div>', unsafe_allow_html=True)
+                fig = px.bar(plot_df, x=customer_col, y="Hours", color="Stage", barmode="group")
+                fig.update_layout(height=430, margin=dict(l=8, r=10, t=5, b=125), xaxis_title="", yaxis_title="Hours")
+                st.plotly_chart(fig, use_container_width=True)
+
+        count_cols = [col for col in raw.columns if re.search(r"iceberg|postgres|count", str(col), re.IGNORECASE)]
+        count_cols = [col for col in count_cols if col in raw.columns and col != customer_col]
+        if count_cols and customer_col:
+            count_df = raw[[customer_col] + count_cols].copy()
+            for col in count_cols:
+                count_df[col] = pd.to_numeric(count_df[col], errors="coerce")
+            count_long = count_df.melt(id_vars=customer_col, var_name="Metric", value_name="Count").dropna(subset=["Count"])
+            with st.container(border=True):
+                st.markdown('<div class="panel-title">Data Fabric Counts</div>', unsafe_allow_html=True)
+                fig = px.bar(count_long, x=customer_col, y="Count", color="Metric", barmode="group", text="Count")
+                fig.update_layout(height=360, margin=dict(l=8, r=10, t=5, b=120), xaxis_title="", yaxis_title="Count")
+                st.plotly_chart(fig, use_container_width=True)
+
+    with st.container(border=True):
+        st.markdown('<div class="panel-title">Cloud Assist Detailed Metrics</div>', unsafe_allow_html=True)
+        display_df = chart_df.copy()
+        display_cols = safe_cols(display_df, ["Customer", "Devices", "E2E Total Minutes", "E2E Total Hours", "SLA Target", "SLA Status", "SLA Breach Hours", "End-to-End Status"])
+        st.dataframe(display_df[display_cols], use_container_width=True, hide_index=True, height=min(540, 78 + 34 * len(display_df)))
 
 
 def get_filtered_frames(run_frames: List[Dict[str, pd.DataFrame]], forced_region: str = "All", forced_track: str = "API") -> List[Dict[str, pd.DataFrame]]:
@@ -4328,6 +4473,21 @@ def render_trends_tab(run_frames: List[Dict[str, pd.DataFrame]], compact: bool =
 def render_detailed_report_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> None:
     df = combined_df(run_frames)
     st.markdown('<div class="panel"><div class="panel-title">DETAILED REPORT</div>', unsafe_allow_html=True)
+    if st.session_state.get("active_track") == TRACK_CLOUD:
+        if df.empty:
+            st.info("No Cloud Assist Connector metrics available.")
+        else:
+            cloud_df = df.copy()
+            cloud_df["E2E Total Hours"] = pd.to_numeric(cloud_df.get("E2E Total Hours", cloud_df.get("Avg ResTime in sec", 0)), errors="coerce").fillna(0)
+            cloud_df["E2E Total Minutes"] = pd.to_numeric(cloud_df.get("E2E Total Minutes", cloud_df["E2E Total Hours"] * 60), errors="coerce").fillna(0)
+            cloud_df["SLA Target"] = "< 24h"
+            cloud_df["SLA Breach Hours"] = pd.to_numeric(cloud_df.get("SLA Breach Sec", 0), errors="coerce").fillna(0)
+            cloud_df["Customer"] = cloud_df.get("Customer Name", cloud_df.get("Scenario", "Customer")).astype(str)
+            cloud_df["Devices"] = cloud_df.get("Devices", cloud_df.get("Endpoint", "N/A")).astype(str)
+            cols = safe_cols(cloud_df, ["Customer", "Devices", "E2E Total Minutes", "E2E Total Hours", "SLA Target", "SLA Status", "SLA Breach Hours", "End-to-End Status"])
+            st.dataframe(cloud_df[cols], use_container_width=True, hide_index=True, height=min(760, 78 + 30 * len(cloud_df)))
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
     if st.session_state.get("active_track") == TRACK_UI:
         df = apply_ui_speed_index_sla(df)
         if df.empty:
@@ -4584,6 +4744,9 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
             st.warning("No reports match the selected filters. Please update Data & Filters.")
             return
 
+        if active_track == TRACK_CLOUD and selected_tab == "Track Comparison":
+            render_cloud_assist_dashboard(selected_frames)
+            return
         if selected_tab == "Track Comparison":
             render_compare_tab(selected_frames)
             return
@@ -4602,6 +4765,9 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
             return
 
         selected_frames_for_sla = normalize_sla_for_dashboard_frames(selected_frames, active_track)
+        if active_track == TRACK_CLOUD:
+            render_cloud_assist_dashboard(selected_frames_for_sla)
+            return
         df = cached_combined_df(selected_frames_for_sla)
         render_aggregated_or_comparison_summary(selected_frames_for_sla)
 
@@ -5681,6 +5847,53 @@ def build_api_like_df_from_csv(csv_path: Path, track_name: str) -> pd.DataFrame:
 
     rows: List[Dict[str, object]] = []
 
+    if track_name == TRACK_CLOUD:
+        e2e_col = pick_first_matching_column(raw, [r"e2e.*total.*time", r"overall.*ibes.*data.*fabric", r"data.*fabric.*pg"])
+        status_col = pick_first_matching_column(raw, [r"end.*to.*end.*status", r"ibes.*status", r"status"])
+        customer_col = pick_first_matching_column(raw, [r"customer.*name", r"customer"])
+        devices_col = pick_first_matching_column(raw, [r"^devices$", r"devices"])
+        e2e_values = to_numeric_series(raw, e2e_col) if e2e_col else pd.Series(dtype=float)
+
+        for idx, row in raw.iterrows():
+            scenario = str(row.get(customer_col) or f"Cloud Assist Customer {idx + 1}").strip()
+            devices = str(row.get(devices_col) or "N/A").strip()
+            e2e_minutes = numeric_scalar(row.get(e2e_col), 0) if e2e_col else 0.0
+            e2e_hours = round(e2e_minutes / 60.0, 3)
+            status = str(row.get(status_col) or "").strip()
+            pass_status = e2e_hours < CLOUD_E2E_SLA_HOURS
+            error_count = 0 if pass_status else 1
+            rows.append({
+                "Feature": TRACK_CLOUD,
+                "Scenario": scenario,
+                "Endpoint": devices,
+                "API": f"{TRACK_CLOUD}/{scenario}/{devices}",
+                "sampleCount": 1,
+                "errorCount": error_count,
+                "errorPct": 0.0 if pass_status else 100.0,
+                "Avg ResTime in sec": e2e_hours,
+                "Min ResTime in sec": e2e_hours,
+                "MaxRes Time in sec": e2e_hours,
+                "SLA Sec": CLOUD_E2E_SLA_HOURS,
+                "SLA Status": "PASS" if pass_status else "FAIL",
+                "SLA Breach Sec": round(max(e2e_hours - CLOUD_E2E_SLA_HOURS, 0.0), 3),
+                "E2E Total Hours": e2e_hours,
+                "SLA Target": "< 24h",
+                "SLA Breach Hours": round(max(e2e_hours - CLOUD_E2E_SLA_HOURS, 0.0), 3),
+                "Track Type": TRACK_CLOUD,
+                "Customer Name": scenario,
+                "Devices": devices,
+                "E2E Total Hours": e2e_hours,
+                "E2E Total Minutes": round(e2e_minutes, 3),
+                "End-to-End Status": status,
+            })
+
+        df = pd.DataFrame(rows)
+        return df if not df.empty else pd.DataFrame(columns=[
+            "Feature", "Scenario", "Endpoint", "sampleCount", "errorCount", "errorPct",
+            "Avg ResTime in sec", "Min ResTime in sec", "MaxRes Time in sec",
+            "SLA Sec", "SLA Status", "SLA Breach Sec", "Track Type",
+        ])
+
     if track_name == TRACK_UI:
         metric_map = {
             "FCP": [r"\bfcp\b", r"first_contentful_paint"],
@@ -5814,11 +6027,17 @@ def generate_dashboard_from_saved_csv(track_name: str, csv_path: Path, item: Dic
 
     apis_df = build_api_like_df_from_csv(csv_path, track_name)
     ui_raw_df = pd.DataFrame()
+    cloud_raw_df = pd.DataFrame()
     if track_name == TRACK_UI:
         try:
             ui_raw_df = pd.read_csv(csv_path)
         except Exception:
             ui_raw_df = pd.DataFrame()
+    elif track_name == TRACK_CLOUD:
+        try:
+            cloud_raw_df = pd.read_csv(csv_path)
+        except Exception:
+            cloud_raw_df = pd.DataFrame()
     run_info = pd.DataFrame([{
         "Report File": (item or {}).get("file_name", csv_path.name),
         "Concurrent Users": (item or {}).get("users") or inferred.get("users", "N/A"),
@@ -5839,6 +6058,7 @@ def generate_dashboard_from_saved_csv(track_name: str, csv_path: Path, item: Dic
         "Region": region,
         "APIs": apis_df,
         "UI_Raw": ui_raw_df,
+        "Cloud_Raw": cloud_raw_df,
         "Transactions": pd.DataFrame(),
         "Errors": apis_df[apis_df.get("errorCount", 0) > 0].copy() if not apis_df.empty else pd.DataFrame(),
         "Run_Info": run_info,
@@ -5870,11 +6090,17 @@ def generate_dashboard_from_uploaded_csv_files(track_name: str, uploaded_files) 
         inferred = infer_saved_report_info(uploaded_file.name)
         apis_df = build_api_like_df_from_csv(temp_path, track_name)
         ui_raw_df = pd.DataFrame()
+        cloud_raw_df = pd.DataFrame()
         if track_name == TRACK_UI:
             try:
                 ui_raw_df = pd.read_csv(temp_path)
             except Exception:
                 ui_raw_df = pd.DataFrame()
+        elif track_name == TRACK_CLOUD:
+            try:
+                cloud_raw_df = pd.read_csv(temp_path)
+            except Exception:
+                cloud_raw_df = pd.DataFrame()
         run_info = pd.DataFrame([{
             "Report File": uploaded_file.name,
             "Concurrent Users": inferred.get("users", "N/A"),
@@ -5894,6 +6120,7 @@ def generate_dashboard_from_uploaded_csv_files(track_name: str, uploaded_files) 
             "Region": inferred.get("region", "Unknown"),
             "APIs": apis_df,
             "UI_Raw": ui_raw_df,
+            "Cloud_Raw": cloud_raw_df,
             "Transactions": pd.DataFrame(),
             "Errors": apis_df[apis_df.get("errorCount", 0) > 0].copy() if not apis_df.empty else pd.DataFrame(),
             "Run_Info": run_info,
