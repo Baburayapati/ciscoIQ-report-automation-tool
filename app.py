@@ -4787,6 +4787,7 @@ def render_overview_comparison_summary(run_frames: List[Dict[str, pd.DataFrame]]
         return {name: round((counts[name] / total) * 100, 2) for name, _, _ in bucket_edges}
 
     def api_and_askai_cards(frames_list: List[Dict[str, pd.DataFrame]]) -> None:
+        cx_ai_active = st.session_state.get("active_program") == PROGRAM_CX_AI_ASSISTANT
         api_buckets = [
             ("0-2s %", None, 2.0),
             ("3-4s %", 2.000001, 4.0),
@@ -4804,6 +4805,7 @@ def render_overview_comparison_summary(run_frames: List[Dict[str, pd.DataFrame]]
         ask_cards: List[Tuple[str, Dict[str, float]]] = []
 
         for frames in frames_list:
+            frames = remove_cx_ai_create_rows_from_frames(frames)
             apis = frames.get("APIs", pd.DataFrame())
             if apis is None or apis.empty or "MaxRes Time in sec" not in apis.columns:
                 continue
@@ -4811,9 +4813,15 @@ def render_overview_comparison_summary(run_frames: List[Dict[str, pd.DataFrame]]
             feature_series = apis.get("Feature", pd.Series(index=apis.index, dtype=str)).astype(str)
             ask_mask = feature_series.str.upper().str.contains("ASKAI|ASK AI", regex=True, na=False)
 
+            label = run_display_label(frames)
+            if cx_ai_active or is_cx_ai_assistant_frame(frames):
+                cx_values = apis["MaxRes Time in sec"]
+                if not cx_values.dropna().empty:
+                    ask_cards.append((label, percentage_buckets(cx_values, ask_buckets)))
+                continue
+
             api_values = apis.loc[~ask_mask, "MaxRes Time in sec"]
             ask_values = apis.loc[ask_mask, "MaxRes Time in sec"]
-            label = run_display_label(frames)
 
             if not api_values.dropna().empty:
                 api_cards.append((label, percentage_buckets(api_values, api_buckets)))
@@ -4838,8 +4846,9 @@ def render_overview_comparison_summary(run_frames: List[Dict[str, pd.DataFrame]]
 </div>
 ''', unsafe_allow_html=True)
 
-        render_cards("API Summary", api_cards, ["0-2s %", "3-4s %", "4-6s %", ">6s %"])
-        render_cards("AskAI Summary", ask_cards, ["0-10s %", "10-20s %", "20-30s %", ">30s %"])
+        if not cx_ai_active:
+            render_cards("API Summary", api_cards, ["0-2s %", "3-4s %", "4-6s %", ">6s %"])
+        render_cards("CX AI Assistant Summary" if cx_ai_active else "AskAI Summary", ask_cards, ["0-10s %", "10-20s %", "20-30s %", ">30s %"])
 
         if not api_cards and not ask_cards:
             st.info("No summary rows found for selected API results.")
@@ -5355,6 +5364,8 @@ def run_display_label(frames: Dict[str, pd.DataFrame]) -> str:
     track_name = frame_track_name(frames)
     if track_name == TRACK_UI:
         return f"{users_clean}Users-{devices_clean}Devices"
+    if is_cx_ai_assistant_frame(frames):
+        return f"{users_clean}Users"
 
     return f"{region_clean}-{users_clean}VU-{devices_clean}"
 
