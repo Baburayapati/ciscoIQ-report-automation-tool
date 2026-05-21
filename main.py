@@ -34,16 +34,22 @@ def is_transaction(name: str) -> bool:
 
 
 def is_cx_ai_assistant_report(value: str | Path) -> bool:
-    normalized = re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+    text = str(value or "")
+    normalized = re.sub(r"[^A-Z0-9]", "", text.upper())
     return "CXAIASSISTANT" in normalized
+
+
+def cx_ai_source_text(source: str | Path, label: str = "") -> str:
+    path = Path(source)
+    return " ".join(str(part) for part in [source, path.name, path.stem, label] if part)
 
 
 def is_create_transaction(name: str) -> bool:
     return str(name or "").strip().upper().startswith("CREATE")
 
 
-def remove_cx_ai_create_rows(df: pd.DataFrame, source: str | Path) -> pd.DataFrame:
-    if df.empty or "transaction" not in df.columns or not is_cx_ai_assistant_report(source):
+def remove_cx_ai_create_rows(df: pd.DataFrame, source: str | Path, label: str = "") -> pd.DataFrame:
+    if df.empty or "transaction" not in df.columns or not is_cx_ai_assistant_report(cx_ai_source_text(source, label)):
         return df
     return df[~df["transaction"].astype(str).str.strip().str.upper().str.startswith("CREATE")].copy()
 
@@ -186,11 +192,11 @@ def apply_common_column_cleanup(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def add_api_sla_columns(apis_df: pd.DataFrame, source: str | Path = "") -> pd.DataFrame:
+def add_api_sla_columns(apis_df: pd.DataFrame, source: str | Path = "", label: str = "") -> pd.DataFrame:
     apis_df = apis_df.copy()
     feature_text = apis_df["Feature"].astype(str).str.upper()
     transaction_text = apis_df.get("transaction", pd.Series("", index=apis_df.index)).astype(str)
-    cx_ai_mask = is_cx_ai_assistant_report(source) | transaction_text.map(is_cx_ai_assistant_report)
+    cx_ai_mask = is_cx_ai_assistant_report(cx_ai_source_text(source, label)) | transaction_text.map(is_cx_ai_assistant_report)
     apis_df["SLA Sec"] = (feature_text.str.startswith("ASKAI") | cx_ai_mask).map({True: 10, False: 2})
     apis_df["SLA Rule"] = apis_df["SLA Sec"].map(
         lambda x: "AskAI/CX AI Assistant APIs SLA < 10 sec" if x == 10 else "Assets, Assessments, Home, Settings and Support APIs SLA < 2 sec"
@@ -249,15 +255,13 @@ def order_columns(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
     return df[[c for c in preferred if c in df.columns] + remaining]
 
 
-def build_single_report_frames(json_path: str | Path):
+def build_single_report_frames(json_path: str | Path, label: str = ""):
     df = load_statistics_json(json_path)
-    df = remove_cx_ai_create_rows(df, json_path)
+    is_cx = is_cx_ai_assistant_report(cx_ai_source_text(json_path, label))
+    df = remove_cx_ai_create_rows(df, json_path, label)
 
-    transactions_df = df[df["transaction"].apply(is_transaction)].copy()
-    if is_cx_ai_assistant_report(json_path):
-        apis_df = df.copy()
-    else:
-        apis_df = df[~df["transaction"].apply(is_transaction)].copy()
+    transactions_df = df.copy() if is_cx else df[df["transaction"].apply(is_transaction)].copy()
+    apis_df = df.copy() if is_cx else df[~df["transaction"].apply(is_transaction)].copy()
     errors_df = df[pd.to_numeric(df.get("errorCount", 0), errors="coerce").fillna(0) > 0].copy()
 
     split_df = apis_df["transaction"].apply(lambda x: pd.Series(split_api_name(x)))
@@ -266,7 +270,7 @@ def build_single_report_frames(json_path: str | Path):
 
     transactions_df = order_columns(apply_common_column_cleanup(transactions_df), "Transactions")
     errors_df = order_columns(apply_common_column_cleanup(errors_df), "Errors")
-    apis_df = order_columns(add_api_sla_columns(apply_common_column_cleanup(apis_df), json_path), "APIs")
+    apis_df = order_columns(add_api_sla_columns(apply_common_column_cleanup(apis_df), json_path, label), "APIs")
 
     return {
         "Transactions": transactions_df,
@@ -302,10 +306,11 @@ def bucket_index(seconds: float, is_askai: bool) -> int:
     return 3
 
 
-def prepare_api_df_for_track(json_path: str | Path) -> pd.DataFrame:
+def prepare_api_df_for_track(json_path: str | Path, label: str = "") -> pd.DataFrame:
     df = load_statistics_json(json_path)
-    df = remove_cx_ai_create_rows(df, json_path)
-    if not is_cx_ai_assistant_report(json_path):
+    is_cx = is_cx_ai_assistant_report(cx_ai_source_text(json_path, label))
+    df = remove_cx_ai_create_rows(df, json_path, label)
+    if not is_cx:
         df = df[~df["transaction"].apply(is_transaction)].copy()
     split_df = df["transaction"].apply(lambda x: pd.Series(split_api_name(x)))
     split_df.columns = ["Feature", "Scenario", "Endpoint"]
@@ -317,7 +322,7 @@ def prepare_api_df_for_track(json_path: str | Path) -> pd.DataFrame:
     return df
 
 
-def track_metric_values(df: pd.DataFrame, track: str, metric: str) -> List[Any]:
+def track_metric_values(df: pd.DataFrame, track: str, metric: str, force_askai_buckets: bool = False) -> List[Any]:
     g = df[df["Feature"] == track].copy()
     if g.empty:
         return ["", "", "", "", ""]
@@ -328,7 +333,7 @@ def track_metric_values(df: pd.DataFrame, track: str, metric: str) -> List[Any]:
         "Max": "max_sec",
     }
     col = metric_to_col[metric]
-    is_askai = str(track).upper().startswith("ASKAI") or is_cx_ai_assistant_report(track)
+    is_askai = force_askai_buckets or str(track).upper().startswith("ASKAI") or is_cx_ai_assistant_report(track)
 
     total_apis = len(g)
     counts = [0, 0, 0, 0]
@@ -349,8 +354,8 @@ def track_metric_values(df: pd.DataFrame, track: str, metric: str) -> List[Any]:
 
 
 def build_track_comparison_matrix(json_paths: List[str | Path], labels: List[str]) -> List[List[Any]]:
-    prepared = [prepare_api_df_for_track(path) for path in json_paths]
-    cx_ai_report = any(is_cx_ai_assistant_report(path) or is_cx_ai_assistant_report(label) for path, label in zip(json_paths, labels))
+    prepared = [prepare_api_df_for_track(path, label) for path, label in zip(json_paths, labels)]
+    cx_ai_report = any(is_cx_ai_assistant_report(cx_ai_source_text(path, label)) for path, label in zip(json_paths, labels))
     all_tracks = sorted(
         track
         for track in set().union(*[set(df["Feature"].dropna().astype(str)) for df in prepared])
@@ -418,7 +423,7 @@ def build_track_comparison_matrix(json_paths: List[str | Path], labels: List[str
             for metric in ["Avg", "Min", "Max"]:
                 row = [track if metric == "Avg" else "", metric]
                 for df in prepared:
-                    row += track_metric_values(df, track, metric)
+                    row += track_metric_values(df, track, metric, force_askai_buckets=cx_ai_report)
                     row += [""]
                 matrix.append(row)
 
@@ -506,7 +511,8 @@ def build_comparison(json_paths: List[str | Path], labels: List[str]) -> pd.Data
 
 
 def build_report(json_path: str | Path, output_excel_path: str | Path) -> None:
-    frames = build_single_report_frames(json_path)
+    label = Path(json_path).stem
+    frames = build_single_report_frames(json_path, label)
     track_matrix = build_track_comparison_matrix([json_path], [Path(json_path).stem])
     write_excel(frames, output_excel_path, track_matrix=track_matrix)
 
@@ -546,8 +552,9 @@ def build_apis_comparison(json_paths: List[str | Path], labels: List[str]) -> pd
 
     for path, label in zip(json_paths, labels):
         df = load_statistics_json(path)
-        df = remove_cx_ai_create_rows(df, path)
-        if not is_cx_ai_assistant_report(path):
+        is_cx = is_cx_ai_assistant_report(cx_ai_source_text(path, label))
+        df = remove_cx_ai_create_rows(df, path, label)
+        if not is_cx:
             df = df[~df["transaction"].apply(is_transaction)].copy()
 
         split_df = df["transaction"].apply(lambda x: pd.Series(split_api_name(x)))
@@ -607,7 +614,7 @@ def build_comparison_insights_frames(json_paths: List[str | Path], labels: List[
     run_info_rows = []
 
     for path, label in zip(json_paths, labels):
-        frames = build_single_report_frames(path)
+        frames = build_single_report_frames(path, label)
         region_info = parse_report_metadata(path)
         region = region_info.get("Region", "N/A")
 

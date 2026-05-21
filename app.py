@@ -2780,7 +2780,7 @@ def saved_report_display_name(item: Dict[str, str]) -> str:
     return f"{report_title(region, users, devices, include_users=include_users)}-{to_mm_dd_yyyy(date)}"
 
 
-def add_ui_sla_columns(apis_df: pd.DataFrame) -> pd.DataFrame:
+def add_ui_sla_columns(apis_df: pd.DataFrame, program_name: str = "") -> pd.DataFrame:
     df = apis_df.copy()
     if df.empty:
         return df
@@ -2794,17 +2794,17 @@ def add_ui_sla_columns(apis_df: pd.DataFrame) -> pd.DataFrame:
     ]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-    if "SLA Sec" not in df.columns:
-        df["SLA Sec"] = 2.0
+    if "SLA Sec" not in df.columns or program_name == PROGRAM_CX_AI_ASSISTANT:
+        df["SLA Sec"] = 10.0 if program_name == PROGRAM_CX_AI_ASSISTANT else 2.0
     df["SLA Sec"] = pd.to_numeric(df["SLA Sec"], errors="coerce")
-    if "SLA Status" not in df.columns:
+    if "SLA Status" not in df.columns or program_name == PROGRAM_CX_AI_ASSISTANT:
         status = (
             (df["Avg ResTime in sec"] <= df["SLA Sec"])
             & (df["Min ResTime in sec"] <= df["SLA Sec"])
             & (df["MaxRes Time in sec"] <= df["SLA Sec"])
         ).map({True: "PASS", False: "FAIL"})
         df["SLA Status"] = status
-    if "SLA Breach Sec" not in df.columns:
+    if "SLA Breach Sec" not in df.columns or program_name == PROGRAM_CX_AI_ASSISTANT:
         df["SLA Breach Sec"] = (df["Avg ResTime in sec"] - df["SLA Sec"]).clip(lower=0).round(2)
     if "Track Type" not in df.columns:
         df["Track Type"] = df["Feature"].astype(str)
@@ -2812,12 +2812,12 @@ def add_ui_sla_columns(apis_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def process_uploaded_file(path: Path, label: str) -> Dict[str, pd.DataFrame]:
-    frames = build_single_report_frames(path)
-    frames["APIs"] = add_ui_sla_columns(frames["APIs"])
+    program_name, track_name = infer_program_track(label)
+    frames = build_single_report_frames(path, label)
+    frames["APIs"] = add_ui_sla_columns(frames["APIs"], program_name)
     frames["Label"] = label
     frames["Region"] = region_from_frames(frames)
     info = infer_saved_report_info(label)
-    program_name, track_name = infer_program_track(label)
     if "Run_Info" in frames and frames["Run_Info"] is not None and not frames["Run_Info"].empty:
         frames["Run_Info"]["Application"] = info.get("application", APP_NAME_TOKEN)
         frames["Run_Info"]["Program"] = program_name
@@ -4417,7 +4417,8 @@ def render_detailed_report_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
 
     c1, c2, c3 = st.columns(3)
     tracks = sorted(df["Feature"].dropna().astype(str).unique().tolist())
-    selected_tracks = c1.multiselect("Track", tracks, default=tracks[: min(10, len(tracks))])
+    default_tracks = tracks if st.session_state.get("active_program") == PROGRAM_CX_AI_ASSISTANT else tracks[: min(10, len(tracks))]
+    selected_tracks = c1.multiselect("Track", tracks, default=default_tracks)
     selected_status = c2.multiselect("SLA Status", ["PASS", "FAIL"], default=["PASS", "FAIL"])
     sort_col = c3.selectbox("Sort by", ["Avg ResTime in sec", "Min ResTime in sec", "MaxRes Time in sec", "errorCount", "sampleCount"])
     filtered = df[df["Feature"].isin(selected_tracks) & df["SLA Status"].isin(selected_status)].sort_values(sort_col, ascending=False)
@@ -5170,7 +5171,7 @@ def cached_excel_bytes_for_saved_api(saved_path_str: str, display_name: str, mti
     """Build Excel bytes for one saved API JSON file and cache by path/name/mtime."""
     saved_path = Path(saved_path_str)
     with tempfile.TemporaryDirectory() as tmpdir:
-        temp_json_path = Path(tmpdir) / f"{display_name}.json"
+        temp_json_path = Path(tmpdir) / saved_path.name
         temp_json_path.write_bytes(saved_path.read_bytes())
         output_path = Path(tmpdir) / f"{display_name}.xlsx"
         build_report(temp_json_path, output_path)
