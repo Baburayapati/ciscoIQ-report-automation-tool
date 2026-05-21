@@ -3694,7 +3694,7 @@ def cloud_overview_detail_df(run_frames: List[Dict[str, pd.DataFrame]], fallback
         display = fallback_df.copy()
     remove_cols = {
         "Feature", "Scenario", "Endpoint", "API", "sampleCount", "errorCount", "errorPct",
-        "SLA Breach Hours", "Track Type", "Track Name", "SLA Breach Sec", "Program", "Region",
+        "SLA Breach Hours", "Track Type", "Track Name", "Customer Name", "Customer", "SLA Breach Sec", "Program", "Region",
         "SLA Hours", "Avg ResTime in hours", "Min ResTime in hours", "MaxRes Time in hours",
         "Avg ResTime in sec", "Min ResTime in sec", "MaxRes Time in sec", "SLA Sec",
     }
@@ -3707,9 +3707,6 @@ def cloud_overview_detail_df(run_frames: List[Dict[str, pd.DataFrame]], fallback
     }
     display = display.rename(columns={old: new for old, new in rename_cols.items() if old in display.columns})
     ordered_cols = list(display.columns)
-    customer_col = next((col for col in ordered_cols if re.search(r"customer.*name|^customer$", str(col), re.IGNORECASE)), None)
-    if customer_col:
-        ordered_cols = [customer_col] + [col for col in ordered_cols if col != customer_col]
     if "SLA Status" in ordered_cols:
         ordered_cols = [col for col in ordered_cols if col != "SLA Status"] + ["SLA Status"]
     display = display[ordered_cols]
@@ -6705,11 +6702,17 @@ def load_saved_dashboard_frames() -> List[Dict[str, pd.DataFrame]]:
                 region = item.get("region") or inferred.get("region", "Unknown")
                 apis_df = build_api_like_df_from_csv(path, track_name)
                 ui_raw_df = pd.DataFrame()
+                cloud_raw_df = pd.DataFrame()
                 if track_name == TRACK_UI:
                     try:
                         ui_raw_df = pd.read_csv(path)
                     except Exception:
                         ui_raw_df = pd.DataFrame()
+                elif track_name == TRACK_CLOUD:
+                    try:
+                        cloud_raw_df = pd.read_csv(path)
+                    except Exception:
+                        cloud_raw_df = pd.DataFrame()
                 run_info = pd.DataFrame([{
                     "Report File": file_name,
                     "Concurrent Users": item.get("users") or inferred.get("users", "N/A"),
@@ -6729,6 +6732,7 @@ def load_saved_dashboard_frames() -> List[Dict[str, pd.DataFrame]]:
                     "Region": region,
                     "APIs": apis_df,
                     "UI_Raw": ui_raw_df,
+                    "Cloud_Raw": cloud_raw_df,
                     "Transactions": pd.DataFrame(),
                     "Errors": apis_df[apis_df.get("errorCount", 0) > 0].copy() if not apis_df.empty else pd.DataFrame(),
                     "Run_Info": run_info,
