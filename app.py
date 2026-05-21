@@ -29,6 +29,10 @@ STATIC_APP_URL = "https://ciscoiq-report-automation-application.streamlit.app/"
 SAVED_REPORT_LIMIT = 15
 PROGRAM_SAAS = "Cisco IQ SaaS Support Services"
 PROGRAM_CX_AI_ASSISTANT = "CX AI Assistant"
+PROGRAM_ONPREM_ASSETS = "Cisco IQ Onprem - Assets"
+PROGRAM_ONPREM_RISK = "Cisco IQ Onprem - Risk App"
+PROGRAM_AI_FRAMEWORK = "AI Framework"
+KNOWN_PROGRAMS = [PROGRAM_SAAS, PROGRAM_ONPREM_ASSETS, PROGRAM_ONPREM_RISK, PROGRAM_CX_AI_ASSISTANT, PROGRAM_AI_FRAMEWORK]
 TRACK_API = "API"
 TRACK_UI = "UI"
 TRACK_CLOUD = "Cloud Assist Connector"
@@ -2574,12 +2578,36 @@ def get_store():
 
 
 def infer_program_track(label: str) -> Tuple[str, str]:
-    name = str(label or "").upper()
+    label_text = str(label or "")
+    name = label_text.upper()
+    compact_name = re.sub(r"[^A-Z0-9]", "", name)
+
+    for program in KNOWN_PROGRAMS:
+        compact_program = re.sub(r"[^A-Z0-9]", "", program.upper())
+        token_parts = [part for part in re.split(r"[^A-Z0-9]+", program.upper()) if len(part) >= 2]
+        starts_like_program = compact_name.startswith(compact_program[: max(6, min(len(compact_program), 14))])
+        contains_program = compact_program and compact_program in compact_name
+        contains_key_parts = len(token_parts) >= 2 and all(part in compact_name for part in token_parts[: min(3, len(token_parts))])
+        if starts_like_program or contains_program or contains_key_parts:
+            if program == PROGRAM_CX_AI_ASSISTANT:
+                return program, TRACK_API
+            if program == PROGRAM_ONPREM_RISK:
+                return program, TRACK_API
+            if program == PROGRAM_ONPREM_ASSETS:
+                return program, TRACK_API
+            if "CLOUD" in name and "CONNECTOR" in name:
+                return program, TRACK_CLOUD
+            if "BENCHMARK" in name or "INVENTORY" in name:
+                return program, TRACK_INVENTORY
+            if "LIGHTHOUSE" in name or re.search(r"(?:^|[_\-])UI(?:[_\-]|$)", name):
+                return program, TRACK_UI
+            return program, TRACK_API
+
     if "ONPREM" in name and "RISK" in name:
-        return "Cisco IQ Onprem - Risk App", TRACK_API
+        return PROGRAM_ONPREM_RISK, TRACK_API
     if "ONPREM" in name and "ASSET" in name:
-        return "Cisco IQ Onprem - Assets", TRACK_API
-    if "CX AI ASSISTANT" in name or "CX_AI_ASSISTANT" in name or "CXAIASSISTANT" in re.sub(r"[^A-Z0-9]", "", name):
+        return PROGRAM_ONPREM_ASSETS, TRACK_API
+    if "CX AI ASSISTANT" in name or "CX_AI_ASSISTANT" in name or "CXAIASSISTANT" in compact_name:
         return PROGRAM_CX_AI_ASSISTANT, TRACK_API
 
     if "CLOUD" in name and "CONNECTOR" in name:
@@ -2796,6 +2824,22 @@ def grouped_saved_uploads_by_program(uploads: List[Dict[str, str]]) -> Dict[str,
     for item in uploads:
         grouped.setdefault(saved_report_program_name(item), []).append(item)
     return dict(sorted(grouped.items(), key=lambda pair: saved_report_program_heading(pair[0]).lower()))
+
+
+def available_program_values(run_frames: List[Dict[str, pd.DataFrame]] | None = None) -> List[str]:
+    values = list(KNOWN_PROGRAMS)
+    for frames in run_frames or []:
+        program = frame_program_name(frames)
+        if program and program not in values:
+            values.append(program)
+    try:
+        for item in normalize_saved_uploads(load_saved_uploads()):
+            program = saved_report_program_name(item)
+            if program and program not in values:
+                values.append(program)
+    except Exception:
+        pass
+    return values
 
 
 def add_ui_sla_columns(apis_df: pd.DataFrame, program_name: str = "") -> pd.DataFrame:
@@ -3601,9 +3645,68 @@ def combined_raw_df(run_frames: List[Dict[str, pd.DataFrame]], raw_key: str) -> 
     return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 
 
-def render_cloud_assist_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> None:
-    df = cached_combined_df(run_frames)
+def clean_cloud_column_name(col: object) -> str:
+    return re.sub(r"\s+", " ", str(col).replace("\ufeff", "").replace("\xa0", " ")).strip()
+
+
+def cloud_mins_to_hours_name(col: object) -> str:
+    name = clean_cloud_column_name(col)
+    return re.sub(r"(?i)_mins\s*$", " (hours)", name)
+
+
+def cloud_raw_display_df(run_frames: List[Dict[str, pd.DataFrame]]) -> pd.DataFrame:
     raw = combined_raw_df(run_frames, "Cloud_Raw")
+    if raw.empty:
+        return raw
+
+    display = raw.copy()
+    display.columns = [clean_cloud_column_name(col) for col in display.columns]
+    for col in list(display.columns):
+        clean_col = clean_cloud_column_name(col)
+        if re.search(r"(?i)_mins\s*$", clean_col):
+            new_col = cloud_mins_to_hours_name(clean_col)
+            display[new_col] = (pd.to_numeric(display[col], errors="coerce") / 60.0).round(3)
+            display = display.drop(columns=[col])
+
+    customer_col = pick_first_matching_column(display, [r"customer.*name", r"customer"])
+    if customer_col and "Track Name" not in display.columns:
+        display.insert(0, "Track Name", display[customer_col].astype(str))
+    if "E2E Total time (Overall IBES+ Data Fabric til PG) (hours)" in display.columns:
+        e2e = pd.to_numeric(display["E2E Total time (Overall IBES+ Data Fabric til PG) (hours)"], errors="coerce")
+        display["SLA Target"] = "< 24h"
+        display["SLA Status"] = (e2e < CLOUD_E2E_SLA_HOURS).map({True: "PASS", False: "FAIL"})
+        display["SLA Breach Hours"] = (e2e - CLOUD_E2E_SLA_HOURS).clip(lower=0).round(3)
+    return display
+
+
+def cloud_hour_columns(df: pd.DataFrame) -> List[str]:
+    return [col for col in df.columns if str(col).endswith("(hours)")]
+
+
+def cloud_count_columns(df: pd.DataFrame) -> List[str]:
+    return [
+        col for col in df.columns
+        if col not in {"S.No", "Run", "Region"}
+        and not str(col).endswith("(hours)")
+        and pd.to_numeric(df[col], errors="coerce").notna().any()
+    ]
+
+
+def highlight_cloud_sla_cells(df: pd.DataFrame):
+    hour_cols = cloud_hour_columns(df)
+    def style_cell(value, col_name):
+        if col_name not in hour_cols:
+            return ""
+        try:
+            return "background-color: #fee2e2; color: #991b1b; font-weight: 800" if float(value) >= CLOUD_E2E_SLA_HOURS else ""
+        except Exception:
+            return ""
+    return df.style.apply(lambda row: [style_cell(row[col], col) for col in df.columns], axis=1)
+
+
+def render_cloud_assist_dashboard(run_frames: List[Dict[str, pd.DataFrame]], comparison_mode: bool = False) -> None:
+    df = cached_combined_df(run_frames)
+    display_raw = cloud_raw_display_df(run_frames)
     if df.empty:
         st.info("No Cloud Assist Connector metrics available.")
         return
@@ -3631,55 +3734,49 @@ def render_cloud_assist_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> 
     chart_df["SLA Target"] = "< 24h"
     chart_df["SLA Breach Hours"] = pd.to_numeric(chart_df.get("SLA Breach Sec", 0), errors="coerce").fillna(0)
 
-    if not raw.empty:
-        customer_col = pick_first_matching_column(raw, [r"customer.*name", r"customer"])
-        devices_col = pick_first_matching_column(raw, [r"^devices$", r"devices"])
-        e2e_col = pick_first_matching_column(raw, [r"e2e.*total.*time", r"overall.*ibes.*data.*fabric", r"data.*fabric.*pg"])
-        numeric_cols = []
-        for col in raw.columns:
-            if col in {customer_col, devices_col}:
-                continue
-            values = pd.to_numeric(raw[col], errors="coerce")
-            if values.notna().any():
-                numeric_cols.append(col)
+    if not display_raw.empty:
+        track_col = "Track Name" if "Track Name" in display_raw.columns else pick_first_matching_column(display_raw, [r"customer.*name", r"customer"])
+        hour_cols = cloud_hour_columns(display_raw)
+        count_cols = cloud_count_columns(display_raw)
 
-        if numeric_cols and customer_col:
-            metric_df = raw[[customer_col] + numeric_cols].copy()
-            metric_display_cols = []
-            for col in numeric_cols:
-                values = pd.to_numeric(metric_df[col], errors="coerce")
-                if str(col).lower().strip().endswith("_mins"):
-                    display_col = str(col).replace("_mins", " (hours)")
-                    metric_df[display_col] = values / 60.0
-                else:
-                    display_col = str(col)
-                    metric_df[display_col] = values
-                metric_display_cols.append(display_col)
-
+        if hour_cols:
             summary_rows = []
-            for col in metric_display_cols:
-                vals = pd.to_numeric(metric_df[col], errors="coerce").dropna()
+            for col in hour_cols:
+                vals = pd.to_numeric(display_raw[col], errors="coerce").dropna()
                 if vals.empty:
                     continue
-                summary_rows.append({
-                    "Metric": col,
-                    "Avg": round(float(vals.mean()), 3),
-                    "Min": round(float(vals.min()), 3),
-                    "Max": round(float(vals.max()), 3),
-                })
+                summary_rows.append({"Metric": col, "Avg Hours": round(float(vals.mean()), 3), "Min Hours": round(float(vals.min()), 3), "Max Hours": round(float(vals.max()), 3)})
             if summary_rows:
                 with st.container(border=True):
-                    st.markdown('<div class="panel-title">Overview Summary - Backend Metrics</div>', unsafe_allow_html=True)
-                    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True, height=min(420, 78 + 34 * len(summary_rows)))
+                    st.markdown('<div class="panel-title">Overview Summary - Backend Metrics (Hours)</div>', unsafe_allow_html=True)
+                    summary_df = pd.DataFrame(summary_rows)
+                    st.dataframe(highlight_cloud_sla_cells(summary_df), use_container_width=True, hide_index=True, height=min(420, 78 + 34 * len(summary_df)))
 
-            plotted_cols = [col for col in metric_display_cols if col != "S.No"]
-            if plotted_cols:
-                metric_long = metric_df[[customer_col] + plotted_cols].melt(id_vars=customer_col, var_name="Metric", value_name="Value").dropna(subset=["Value"])
-                with st.container(border=True):
-                    st.markdown('<div class="panel-title">All Backend Metrics by Customer</div>', unsafe_allow_html=True)
-                    fig = px.bar(metric_long, x=customer_col, y="Value", color="Metric", barmode="group")
-                    fig.update_layout(height=470, margin=dict(l=8, r=10, t=5, b=125), xaxis_title="", yaxis_title="Value")
-                    st.plotly_chart(fig, use_container_width=True)
+        if hour_cols and track_col:
+            hour_long = display_raw[[track_col] + hour_cols].melt(id_vars=track_col, var_name="Metric", value_name="Hours").dropna(subset=["Hours"])
+            hour_long["SLA Breach"] = pd.to_numeric(hour_long["Hours"], errors="coerce") >= CLOUD_E2E_SLA_HOURS
+            with st.container(border=True):
+                st.markdown('<div class="panel-title">All Duration Metrics by Track Name</div>', unsafe_allow_html=True)
+                fig = px.bar(hour_long, x=track_col, y="Hours", color="Metric", barmode="group", text="Hours")
+                fig.add_hline(y=CLOUD_E2E_SLA_HOURS, line_dash="dash", line_color="#ef4444", annotation_text="24h SLA")
+                fig.update_traces(texttemplate="%{text:.2f}h", textposition="outside")
+                fig.update_layout(height=520, margin=dict(l=8, r=10, t=5, b=135), xaxis_title="Track Name", yaxis_title="Hours")
+                st.plotly_chart(fig, use_container_width=True)
+
+            with st.container(border=True):
+                st.markdown('<div class="panel-title">Duration Heatmap by Track Name</div>', unsafe_allow_html=True)
+                heat_df = display_raw.set_index(track_col)[hour_cols].apply(pd.to_numeric, errors="coerce")
+                fig = px.imshow(heat_df, text_auto=".2f", aspect="auto", color_continuous_scale="RdYlGn_r")
+                fig.update_layout(height=420, margin=dict(l=8, r=10, t=5, b=60), xaxis_title="Metric", yaxis_title="Track Name")
+                st.plotly_chart(fig, use_container_width=True)
+
+        if count_cols and track_col:
+            count_long = display_raw[[track_col] + count_cols].melt(id_vars=track_col, var_name="Metric", value_name="Count").dropna(subset=["Count"])
+            with st.container(border=True):
+                st.markdown('<div class="panel-title">Count Metrics by Track Name</div>', unsafe_allow_html=True)
+                fig = px.bar(count_long, x=track_col, y="Count", color="Metric", barmode="group", text="Count")
+                fig.update_layout(height=390, margin=dict(l=8, r=10, t=5, b=135), xaxis_title="Track Name", yaxis_title="Count")
+                st.plotly_chart(fig, use_container_width=True)
 
     left, right = st.columns([1.45, 1], gap="medium")
     with left:
@@ -3695,41 +3792,10 @@ def render_cloud_assist_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> 
             st.markdown('<div class="panel-title">SLA Status</div>', unsafe_allow_html=True)
             st.plotly_chart(sla_donut(df), use_container_width=True)
 
-    if not raw.empty:
-        duration_cols = [col for col in raw.columns if str(col).lower().strip().endswith("_mins")]
-        duration_cols = [col for col in duration_cols if col in raw.columns]
-        customer_col = pick_first_matching_column(raw, [r"customer.*name", r"customer"])
-        if duration_cols and customer_col:
-            long_df = raw[[customer_col] + duration_cols].copy()
-            for col in duration_cols:
-                long_df[col.replace("_mins", "_hours")] = pd.to_numeric(long_df[col], errors="coerce") / 60.0
-            hour_cols = [col.replace("_mins", "_hours") for col in duration_cols]
-            plot_df = long_df[[customer_col] + hour_cols].melt(id_vars=customer_col, var_name="Stage", value_name="Hours")
-            plot_df["Stage"] = plot_df["Stage"].str.replace("_hours", "", regex=False).str.replace("_", " ", regex=False)
-            with st.container(border=True):
-                st.markdown('<div class="panel-title">Backend Stage Durations</div>', unsafe_allow_html=True)
-                fig = px.bar(plot_df, x=customer_col, y="Hours", color="Stage", barmode="group")
-                fig.update_layout(height=430, margin=dict(l=8, r=10, t=5, b=125), xaxis_title="", yaxis_title="Hours")
-                st.plotly_chart(fig, use_container_width=True)
-
-        count_cols = [col for col in raw.columns if re.search(r"iceberg|postgres|count", str(col), re.IGNORECASE)]
-        count_cols = [col for col in count_cols if col in raw.columns and col != customer_col]
-        if count_cols and customer_col:
-            count_df = raw[[customer_col] + count_cols].copy()
-            for col in count_cols:
-                count_df[col] = pd.to_numeric(count_df[col], errors="coerce")
-            count_long = count_df.melt(id_vars=customer_col, var_name="Metric", value_name="Count").dropna(subset=["Count"])
-            with st.container(border=True):
-                st.markdown('<div class="panel-title">Data Fabric Counts</div>', unsafe_allow_html=True)
-                fig = px.bar(count_long, x=customer_col, y="Count", color="Metric", barmode="group", text="Count")
-                fig.update_layout(height=360, margin=dict(l=8, r=10, t=5, b=120), xaxis_title="", yaxis_title="Count")
-                st.plotly_chart(fig, use_container_width=True)
-
     with st.container(border=True):
         st.markdown('<div class="panel-title">Cloud Assist Detailed Metrics</div>', unsafe_allow_html=True)
-        display_df = chart_df.copy()
-        display_cols = safe_cols(display_df, ["Customer", "Devices", "E2E Total Minutes", "E2E Total Hours", "SLA Target", "SLA Status", "SLA Breach Hours", "End-to-End Status"])
-        st.dataframe(display_df[display_cols], use_container_width=True, hide_index=True, height=min(540, 78 + 34 * len(display_df)))
+        detail_df = display_raw if not display_raw.empty else chart_df
+        st.dataframe(highlight_cloud_sla_cells(detail_df), use_container_width=True, hide_index=True, height=min(620, 78 + 34 * len(detail_df)))
 
 
 def get_filtered_frames(run_frames: List[Dict[str, pd.DataFrame]], forced_region: str = "All", forced_track: str = "API") -> List[Dict[str, pd.DataFrame]]:
@@ -4474,18 +4540,11 @@ def render_detailed_report_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
     df = combined_df(run_frames)
     st.markdown('<div class="panel"><div class="panel-title">DETAILED REPORT</div>', unsafe_allow_html=True)
     if st.session_state.get("active_track") == TRACK_CLOUD:
-        if df.empty:
+        cloud_df = cloud_raw_display_df(run_frames)
+        if cloud_df.empty:
             st.info("No Cloud Assist Connector metrics available.")
         else:
-            cloud_df = df.copy()
-            cloud_df["E2E Total Hours"] = pd.to_numeric(cloud_df.get("E2E Total Hours", cloud_df.get("Avg ResTime in sec", 0)), errors="coerce").fillna(0)
-            cloud_df["E2E Total Minutes"] = pd.to_numeric(cloud_df.get("E2E Total Minutes", cloud_df["E2E Total Hours"] * 60), errors="coerce").fillna(0)
-            cloud_df["SLA Target"] = "< 24h"
-            cloud_df["SLA Breach Hours"] = pd.to_numeric(cloud_df.get("SLA Breach Sec", 0), errors="coerce").fillna(0)
-            cloud_df["Customer"] = cloud_df.get("Customer Name", cloud_df.get("Scenario", "Customer")).astype(str)
-            cloud_df["Devices"] = cloud_df.get("Devices", cloud_df.get("Endpoint", "N/A")).astype(str)
-            cols = safe_cols(cloud_df, ["Customer", "Devices", "E2E Total Minutes", "E2E Total Hours", "SLA Target", "SLA Status", "SLA Breach Hours", "End-to-End Status"])
-            st.dataframe(cloud_df[cols], use_container_width=True, hide_index=True, height=min(760, 78 + 30 * len(cloud_df)))
+            st.dataframe(highlight_cloud_sla_cells(cloud_df), use_container_width=True, hide_index=True, height=min(760, 78 + 30 * len(cloud_df)))
         st.markdown("</div>", unsafe_allow_html=True)
         return
     if st.session_state.get("active_track") == TRACK_UI:
@@ -4617,7 +4676,7 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
         st.session_state.pop("dashboard_dropdown", None)
 
     active_program = st.session_state.get("active_program") or params.get("program", "") or PROGRAM_SAAS
-    program_values = [PROGRAM_SAAS, "Cisco IQ Onprem - Assets", "Cisco IQ Onprem - Risk App", PROGRAM_CX_AI_ASSISTANT, "AI Framework"]
+    program_values = available_program_values(run_frames)
     if active_program not in program_values:
         active_program = PROGRAM_SAAS
     st.session_state["active_program"] = active_program
@@ -4708,7 +4767,7 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
     active_program = st.session_state.get("active_program", active_program)
     active_track = st.session_state.get("active_track", active_track)
 
-    if active_program not in {PROGRAM_SAAS, PROGRAM_CX_AI_ASSISTANT}:
+    if active_program not in available_program_values(run_frames):
         with st.container(border=True):
             st.markdown('<div class="panel-title">Coming Soon</div>', unsafe_allow_html=True)
             st.info(f"{active_program} is planned for Q4FY26. Dashboard enablement is in upcoming release windows.")
@@ -5494,9 +5553,8 @@ def normalize_saved_uploads(existing: List[Dict[str, str]]) -> List[Dict[str, st
         file_hash = item.get("file_hash", "")
 
         program_name = item.get("program") or infer_program_track(file_name)[0]
-        if program_name not in {PROGRAM_SAAS, PROGRAM_CX_AI_ASSISTANT}:
-            to_remove.append(item)
-            continue
+        if not item.get("program"):
+            item["program"] = program_name
 
         # Backfill hash for older saved files if missing.
         saved_path = SAVED_REPORTS_DIR / saved_name
@@ -5523,7 +5581,7 @@ def normalize_saved_uploads(existing: List[Dict[str, str]]) -> List[Dict[str, st
             seen_names.add(file_name)
         cleaned.append(item)
 
-    # Remove duplicate/non-SaaS physical files.
+    # Remove duplicate physical files.
     for item in to_remove:
         try:
             dup_path = SAVED_REPORTS_DIR / item.get("saved_name", "")
@@ -6898,7 +6956,7 @@ elif team_upload_view:
                     st.session_state.messages = []
                     st.session_state.run_id = new_run_id
                     uploaded_programs = {frame_program_name(frames) for frames in run_frames}
-                    active_program_for_upload = PROGRAM_CX_AI_ASSISTANT if uploaded_programs == {PROGRAM_CX_AI_ASSISTANT} else PROGRAM_SAAS
+                    active_program_for_upload = next(iter(uploaded_programs)) if len(uploaded_programs) == 1 else PROGRAM_SAAS
                     st.session_state["active_program"] = active_program_for_upload
                     st.session_state["active_track"] = TRACK_API
                     st.session_state["dashboard_tab"] = "Overview"
