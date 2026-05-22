@@ -96,6 +96,15 @@ def looks_like_cx_ai_apis(apis_df: pd.DataFrame) -> bool:
     return len(cx_like) >= max(3, int(len(names) * 0.6))
 
 
+def cx_ai_short_label(label: str) -> str:
+    text = str(label or "")
+    match = re.search(r"(\d+(?:\.\d+)?\s*K?)\s*[_\-\s]*(?:USERS?|VU)\b", text, re.IGNORECASE)
+    if not match:
+        match = re.search(r"(?:USERS?|VU)[_\-\s]*(\d+(?:\.\d+)?\s*K?)\b", text, re.IGNORECASE)
+    users = match.group(1).replace(" ", "") if match else "N/A"
+    return f"{users}Users"
+
+
 def split_api_name(name: str) -> Tuple[str, str, str]:
     parts = str(name).split("/")
     if len(parts) >= 3:
@@ -408,7 +417,7 @@ def track_metric_values(df: pd.DataFrame, track: str, metric: str, force_askai_b
 
 def build_track_comparison_matrix(json_paths: List[str | Path], labels: List[str]) -> List[List[Any]]:
     prepared = [prepare_api_df_for_track(path, label) for path, label in zip(json_paths, labels)]
-    cx_ai_report = any(is_cx_ai_assistant_report(cx_ai_source_text(path, label)) for path, label in zip(json_paths, labels))
+    cx_ai_report = any(is_cx_ai_assistant_report(cx_ai_source_text(path, label)) for path, label in zip(json_paths, labels)) or any(looks_like_cx_ai_apis(df) for df in prepared)
     all_tracks = sorted(
         track
         for track in set().union(*[set(df["Feature"].dropna().astype(str)) for df in prepared])
@@ -424,7 +433,8 @@ def build_track_comparison_matrix(json_paths: List[str | Path], labels: List[str
         askai_tracks = [track for track in all_tracks if str(track).upper().startswith("ASKAI")]
         other_tracks = [track for track in all_tracks if not str(track).upper().startswith("ASKAI")]
 
-    report_title = " vs ".join(labels)
+    display_labels = [cx_ai_short_label(label) for label in labels] if cx_ai_report else labels
+    report_title = " vs ".join(display_labels)
 
     def metric_values_for_tracks(df: pd.DataFrame, tracks: List[str], metric: str) -> List[Any]:
         g = df[df["Feature"].isin(tracks)].copy()

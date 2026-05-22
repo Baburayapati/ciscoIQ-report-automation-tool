@@ -4729,7 +4729,7 @@ def render_dashboard_excel_report_actions(region_focus: str = "All") -> None:
         st.markdown(f'<div class="excel-only-name">{display_name}</div>', unsafe_allow_html=True)
         if saved_path.exists():
             try:
-                excel_bytes_for_download = cached_excel_bytes_for_saved_api(
+                excel_bytes_for_download = cached_excel_bytes_for_saved_api_v2(
                     str(saved_path),
                     display_name,
                     saved_path.stat().st_mtime,
@@ -5481,6 +5481,10 @@ def cached_excel_bytes_for_saved_api(saved_path_str: str, display_name: str, mti
         output_path = Path(tmpdir) / f"{display_name}.xlsx"
         build_report(temp_json_path, output_path)
         return output_path.read_bytes()
+
+
+def cached_excel_bytes_for_saved_api_v2(saved_path_str: str, display_name: str, mtime: float) -> bytes:
+    return cached_excel_bytes_for_saved_api(saved_path_str, display_name, mtime)
 
 def compact_saved_file_label(file_name: str) -> str:
     """Return short report label similar to Reports tab: Region-Users-Devices-Date."""
@@ -6547,7 +6551,7 @@ def render_excel_reports_grouped_by_program() -> None:
                 with col_download:
                     if saved_path.exists():
                         try:
-                            excel_bytes_for_download = cached_excel_bytes_for_saved_api(
+                            excel_bytes_for_download = cached_excel_bytes_for_saved_api_v2(
                                 str(saved_path),
                                 display_name,
                                 saved_path.stat().st_mtime,
@@ -6660,7 +6664,7 @@ def render_saved_reports_compact_for_track(track_name: str, title: str | None = 
                     st.error(f"Failed to generate saved report: {exc}")
             if action_download_col is not None:
                 try:
-                    excel_bytes_for_download = cached_excel_bytes_for_saved_api(
+                    excel_bytes_for_download = cached_excel_bytes_for_saved_api_v2(
                         str(file_path),
                         report_name,
                         file_path.stat().st_mtime,
