@@ -39,6 +39,11 @@ def is_cx_ai_assistant_report(value: str | Path) -> bool:
     return "CXAIASSISTANT" in normalized
 
 
+def is_cx_ai_transaction_name(name: str) -> bool:
+    text = str(name or "").strip().upper()
+    return bool(re.match(r"^T\d+", text)) or text.startswith("CREATE")
+
+
 def cx_ai_source_text(source: str | Path, label: str = "") -> str:
     path = Path(source)
     return " ".join(str(part) for part in [source, path.name, path.stem, label] if part)
@@ -55,8 +60,8 @@ def remove_cx_ai_create_rows(df: pd.DataFrame, source: str | Path, label: str = 
 
 
 def sla_context_from_apis(apis_df: pd.DataFrame, is_cx_ai: bool = False) -> str:
-    if is_cx_ai:
-        return "CX AI Assistant APIs use < 10 sec SLA."
+    if is_cx_ai or looks_like_cx_ai_apis(apis_df):
+        return "CX AI Assistant APIs use < 90 sec SLA."
     if apis_df.empty:
         return "SLA thresholds are based on the API type for this program."
     sla_values = pd.Series(dtype=float)
@@ -75,6 +80,20 @@ def sla_context_from_apis(apis_df: pd.DataFrame, is_cx_ai: bool = False) -> str:
     if set(unique_slas).issubset({2.0, 10.0}):
         return "AskAI APIs use < 10 sec SLA; Assets, Assessments, Home, Settings and Support APIs use < 2 sec SLA."
     return "SLA thresholds in this report: " + ", ".join(f"< {value:g} sec" for value in unique_slas) + "."
+
+
+def looks_like_cx_ai_apis(apis_df: pd.DataFrame) -> bool:
+    if apis_df.empty:
+        return False
+    candidates = []
+    for col in ["transaction", "Feature", "Scenario", "Endpoint"]:
+        if col in apis_df.columns:
+            candidates.extend(apis_df[col].dropna().astype(str).tolist())
+    names = [name for name in candidates if name and name.strip().lower() != "total"]
+    if not names:
+        return False
+    cx_like = [name for name in names if is_cx_ai_transaction_name(name)]
+    return len(cx_like) >= max(3, int(len(names) * 0.6))
 
 
 def split_api_name(name: str) -> Tuple[str, str, str]:
@@ -219,10 +238,13 @@ def add_api_sla_columns(apis_df: pd.DataFrame, source: str | Path = "", label: s
     apis_df = apis_df.copy()
     feature_text = apis_df["Feature"].astype(str).str.upper()
     transaction_text = apis_df.get("transaction", pd.Series("", index=apis_df.index)).astype(str)
-    cx_ai_mask = is_cx_ai_assistant_report(cx_ai_source_text(source, label)) | transaction_text.map(is_cx_ai_assistant_report)
-    apis_df["SLA Sec"] = (feature_text.str.startswith("ASKAI") | cx_ai_mask).map({True: 10, False: 2})
+    source_is_cx = is_cx_ai_assistant_report(cx_ai_source_text(source, label)) or transaction_text.map(is_cx_ai_transaction_name).mean() >= 0.6
+    cx_ai_mask = source_is_cx | transaction_text.map(is_cx_ai_assistant_report)
+    apis_df["SLA Sec"] = 2.0
+    apis_df.loc[feature_text.str.startswith("ASKAI"), "SLA Sec"] = 10.0
+    apis_df.loc[cx_ai_mask, "SLA Sec"] = 90.0
     apis_df["SLA Rule"] = apis_df["SLA Sec"].map(
-        lambda x: "AskAI/CX AI Assistant APIs SLA < 10 sec" if x == 10 else "Assets, Assessments, Home, Settings and Support APIs SLA < 2 sec"
+        lambda x: "CX AI Assistant APIs SLA < 90 sec" if x == 90 else "AskAI APIs SLA < 10 sec" if x == 10 else "Assets, Assessments, Home, Settings and Support APIs SLA < 2 sec"
     )
     def row_pass(row: pd.Series) -> str:
         threshold = float(row["SLA Sec"])
@@ -309,8 +331,16 @@ def bucket_headers_for_track(track: str) -> List[str]:
     return ["0 - 2s in %", "3 - 4s in %", "4 - 6s in %", "> 6s in %"]
 
 
-def bucket_index(seconds: float, is_askai: bool) -> int:
+def bucket_index(seconds: float, is_askai: bool, is_cx_ai: bool = False) -> int:
     value = float(seconds)
+    if is_cx_ai:
+        if value <= 90:
+            return 0
+        if value <= 100:
+            return 1
+        if value <= 110:
+            return 2
+        return 3
     if is_askai:
         if value <= 10:
             return 0
@@ -345,7 +375,7 @@ def prepare_api_df_for_track(json_path: str | Path, label: str = "") -> pd.DataF
     return df
 
 
-def track_metric_values(df: pd.DataFrame, track: str, metric: str, force_askai_buckets: bool = False) -> List[Any]:
+def track_metric_values(df: pd.DataFrame, track: str, metric: str, force_askai_buckets: bool = False, force_cx_buckets: bool = False) -> List[Any]:
     g = df[df["Feature"] == track].copy()
     if g.empty:
         return ["", "", "", "", ""]
@@ -362,7 +392,7 @@ def track_metric_values(df: pd.DataFrame, track: str, metric: str, force_askai_b
     counts = [0, 0, 0, 0]
 
     for value in pd.to_numeric(g[col], errors="coerce").dropna():
-        counts[bucket_index(value, is_askai)] += 1
+        counts[bucket_index(value, is_askai, force_cx_buckets)] += 1
 
     percentages = [round((count / total_apis) * 100, 2) for count in counts]
     max_seconds = round(float(pd.to_numeric(g[col], errors="coerce").max()), 2)
@@ -415,7 +445,7 @@ def build_track_comparison_matrix(json_paths: List[str | Path], labels: List[str
 
         counts = [0, 0, 0, 0]
         for value in values:
-            counts[bucket_index(value, is_askai_section)] += 1
+            counts[bucket_index(value, is_askai_section, cx_ai_report)] += 1
 
         percentages = [round((count / len(values)) * 100, 2) for count in counts]
         max_seconds = round(float(values.max()), 2)
@@ -446,7 +476,7 @@ def build_track_comparison_matrix(json_paths: List[str | Path], labels: List[str
             for metric in ["Avg", "Min", "Max"]:
                 row = [track if metric == "Avg" else "", metric]
                 for df in prepared:
-                    row += track_metric_values(df, track, metric, force_askai_buckets=cx_ai_report)
+                    row += track_metric_values(df, track, metric, force_askai_buckets=cx_ai_report, force_cx_buckets=cx_ai_report)
                     row += [""]
                 matrix.append(row)
 
@@ -458,7 +488,7 @@ def build_track_comparison_matrix(json_paths: List[str | Path], labels: List[str
         matrix,
         "CX AI Assistant" if cx_ai_report else "AskAI Tracks",
         askai_tracks,
-        ["0-10sec %", "10-20sec %", "20-30sec %", ">30sec %"],
+        ["0-90sec %", "90-100sec %", "100-110sec %", ">110sec %"] if cx_ai_report else ["0-10sec %", "10-20sec %", "20-30sec %", ">30sec %"],
     )
 
     add_section(
@@ -881,13 +911,16 @@ def build_insights_sheet(ws, frames: Dict[str, pd.DataFrame]):
     run_info_df = frames.get("Run_Info", pd.DataFrame())
     run_info = run_info_df.iloc[0].to_dict() if run_info_df is not None and not run_info_df.empty else {}
     report_text = " ".join(str(run_info.get(key, "")) for key in ["Program", "Report File", "Track"])
-    is_cx_ai = is_cx_ai_assistant_report(report_text)
+    is_cx_ai = is_cx_ai_assistant_report(report_text) or looks_like_cx_ai_apis(apis_df)
 
     if not apis_df.empty and "Feature" in apis_df.columns:
         apis_df = apis_df[
             (apis_df["Feature"].astype(str).str.strip().str.lower() != "total")
             & (~apis_df["Feature"].astype(str).str.lower().str.contains("select customer", na=False))
         ].copy()
+    if is_cx_ai and not apis_df.empty:
+        apis_df["SLA Sec"] = 90.0
+        apis_df["SLA Rule"] = "CX AI Assistant APIs SLA < 90 sec"
 
     total_apis = len(apis_df)
     total_samples = int(pd.to_numeric(apis_df.get("sampleCount", 0), errors="coerce").fillna(0).sum()) if not apis_df.empty else 0
@@ -895,9 +928,9 @@ def build_insights_sheet(ws, frames: Dict[str, pd.DataFrame]):
 
     if not apis_df.empty:
         if "SLA Sec" in apis_df.columns:
-            sla_sec_series = pd.to_numeric(apis_df["SLA Sec"], errors="coerce").fillna(10 if is_cx_ai else 2)
+            sla_sec_series = pd.to_numeric(apis_df["SLA Sec"], errors="coerce").fillna(90 if is_cx_ai else 2)
         else:
-            sla_sec_series = apis_df["Feature"].astype(str).str.upper().str.startswith("ASKAI").map({True: 10, False: 10 if is_cx_ai else 2})
+            sla_sec_series = apis_df["Feature"].astype(str).str.upper().str.startswith("ASKAI").map({True: 10, False: 90 if is_cx_ai else 2})
         avg_sec_series = pd.to_numeric(apis_df.get("Avg ResTime in sec", 0), errors="coerce").fillna(0)
         sla_pass = int((avg_sec_series < sla_sec_series).sum())
         sla_fail = int((avg_sec_series >= sla_sec_series).sum())
@@ -1161,10 +1194,10 @@ def write_track_comparison_sheet(wb: Workbook, track_matrix: List[List[Any]]):
         if (
             a == "Track"
             and b == "Metric"
-            and c not in ("0-10sec %", "0-2sec %")
+            and c not in ("0-90sec %", "0-10sec %", "0-2sec %")
             and next_a == "Track"
             and next_b == "Metric"
-            and next_c in ("0-10sec %", "0-2sec %")
+            and next_c in ("0-90sec %", "0-10sec %", "0-2sec %")
         ):
             ws.delete_rows(row_idx, 1)
             continue

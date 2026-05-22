@@ -33,6 +33,7 @@ PROGRAM_ONPREM_ASSETS = "Cisco IQ Onprem - Assets"
 PROGRAM_ONPREM_RISK = "Cisco IQ Onprem - Risk App"
 PROGRAM_AI_FRAMEWORK = "AI Framework"
 KNOWN_PROGRAMS = [PROGRAM_SAAS, PROGRAM_ONPREM_ASSETS, PROGRAM_ONPREM_RISK, PROGRAM_CX_AI_ASSISTANT, PROGRAM_AI_FRAMEWORK]
+CX_AI_ASSISTANT_SLA_SEC = 90.0
 TRACK_API = "API"
 TRACK_UI = "UI"
 TRACK_CLOUD = "Cloud Assist Connector"
@@ -2858,7 +2859,7 @@ def add_ui_sla_columns(apis_df: pd.DataFrame, program_name: str = "") -> pd.Data
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
     if "SLA Sec" not in df.columns or program_name == PROGRAM_CX_AI_ASSISTANT:
-        df["SLA Sec"] = 10.0 if program_name == PROGRAM_CX_AI_ASSISTANT else 2.0
+        df["SLA Sec"] = CX_AI_ASSISTANT_SLA_SEC if program_name == PROGRAM_CX_AI_ASSISTANT else 2.0
     df["SLA Sec"] = pd.to_numeric(df["SLA Sec"], errors="coerce")
     if "SLA Status" not in df.columns or program_name == PROGRAM_CX_AI_ASSISTANT:
         status = (
@@ -2981,7 +2982,8 @@ def apply_api_sla_thresholds(df: pd.DataFrame) -> pd.DataFrame:
     run_text = work.get("Run", pd.Series("", index=work.index)).astype(str)
     cx_ai_mask = program_text.str.upper().str.contains("CX AI ASSISTANT", regex=False, na=False) | run_text.str.upper().str.contains("CXAIASSISTANT|CX_AI_ASSISTANT|CX AI ASSISTANT", regex=True, na=False)
     work["SLA Sec"] = 2.0
-    work.loc[ask_mask | cx_ai_mask, "SLA Sec"] = 10.0
+    work.loc[ask_mask, "SLA Sec"] = 10.0
+    work.loc[cx_ai_mask, "SLA Sec"] = CX_AI_ASSISTANT_SLA_SEC
 
     avg_series = pd.to_numeric(work.get("Avg ResTime in sec", 0), errors="coerce").fillna(0)
     work["SLA Status"] = (avg_series <= pd.to_numeric(work["SLA Sec"], errors="coerce").fillna(2.0)).map({True: "PASS", False: "FAIL"})
@@ -4115,8 +4117,16 @@ def cached_auto_insights(run_frames: List[Dict[str, pd.DataFrame]]) -> List[Tupl
     return cache[key]
 
 
-def response_bucket(value: float, is_askai: bool) -> str:
+def response_bucket(value: float, is_askai: bool, is_cx_ai: bool = False) -> str:
     value = float(value or 0)
+    if is_cx_ai:
+        if value <= 90:
+            return "0-90sec %"
+        if value <= 100:
+            return "90-100sec %"
+        if value <= 110:
+            return "100-110sec %"
+        return ">110sec %"
     if is_askai:
         if value <= 10:
             return "0-10s %"
@@ -4184,29 +4194,29 @@ def build_dashboard_track_comparison(run_frames: List[Dict[str, pd.DataFrame]]) 
 
     other_tracks = all_tracks
 
-    def metric_bucket_summary_for_rows(rows: pd.DataFrame, metric: str, is_askai: bool) -> List[float]:
+    def metric_bucket_summary_for_rows(rows: pd.DataFrame, metric: str, is_askai: bool, is_cx_ai: bool = False) -> List[float]:
         col_map = {
             "Avg": "Avg ResTime in sec",
             "Min": "Min ResTime in sec",
             "Max": "MaxRes Time in sec",
         }
         col = col_map[metric]
-        bucket_names = ["0-10s %", "10-20s %", "20-30s %", ">30s %"] if is_askai else ["0-2s %", "3-4s %", "4-6s %", ">6s %"]
+        bucket_names = ["0-90sec %", "90-100sec %", "100-110sec %", ">110sec %"] if is_cx_ai else ["0-10s %", "10-20s %", "20-30s %", ">30s %"] if is_askai else ["0-2s %", "3-4s %", "4-6s %", ">6s %"]
         if rows.empty or col not in rows.columns:
             return [0, 0, 0, 0, 0]
 
         counts = dict.fromkeys(bucket_names, 0)
         values = pd.to_numeric(rows[col], errors="coerce").fillna(0)
         for value in values:
-            bucket = response_bucket(float(value), is_askai)
+            bucket = response_bucket(float(value), is_askai, is_cx_ai)
             counts[bucket] = counts.get(bucket, 0) + 1
         total = len(values) if len(values) else 1
         percentages = [round(counts[name] / total * 100, 2) for name in bucket_names]
         return percentages + [round(float(values.max()), 2)]
 
-    def build_section(tracks: List[str], is_askai: bool) -> pd.DataFrame:
+    def build_section(tracks: List[str], is_askai: bool, is_cx_ai: bool = False) -> pd.DataFrame:
         rows = []
-        bucket_names = ["0-10s %", "10-20s %", "20-30s %", ">30s %"] if is_askai else ["0-2s %", "3-4s %", "4-6s %", ">6s %"]
+        bucket_names = ["0-90sec %", "90-100sec %", "100-110sec %", ">110sec %"] if is_cx_ai else ["0-10s %", "10-20s %", "20-30s %", ">30s %"] if is_askai else ["0-2s %", "3-4s %", "4-6s %", ">6s %"]
         row_targets = ["Total"] + tracks
 
         for target in row_targets:
@@ -4221,7 +4231,7 @@ def build_dashboard_track_comparison(run_frames: List[Dict[str, pd.DataFrame]]) 
 
                 display_label = run_display_label(frames)
                 for metric_index, metric in enumerate(["Avg", "Min", "Max"]):
-                    values = metric_bucket_summary_for_rows(api_rows, metric, is_askai)
+                    values = metric_bucket_summary_for_rows(api_rows, metric, is_askai, is_cx_ai)
                     row = {
                         "_TrackKey": target,
                         "Track": target if first_target_row else "",
@@ -4241,7 +4251,7 @@ def build_dashboard_track_comparison(run_frames: List[Dict[str, pd.DataFrame]]) 
     cx_ai_tracks = other_tracks if cx_ai_active else []
     api_tracks = [t for t in other_tracks if t not in askai_tracks and t not in cx_ai_tracks]
     askai_like_tracks = list(dict.fromkeys(askai_tracks + cx_ai_tracks))
-    return build_section(askai_like_tracks, True), build_section(api_tracks, False)
+    return build_section(askai_like_tracks, True, cx_ai_active), build_section(api_tracks, False)
 
 
 def display_track_comparison_df(df: pd.DataFrame) -> pd.DataFrame:
@@ -4269,7 +4279,9 @@ def track_comparison_matrix_html(data: pd.DataFrame) -> str:
 
     metric_order = ["Avg", "Min", "Max"]
     data_cols = set(data.columns)
-    if {"0-10s %", "10-20s %", "20-30s %", ">30s %"}.issubset(data_cols):
+    if {"0-90sec %", "90-100sec %", "100-110sec %", ">110sec %"}.issubset(data_cols):
+        bucket_cols = ["0-90sec %", "90-100sec %", "100-110sec %", ">110sec %"]
+    elif {"0-10s %", "10-20s %", "20-30s %", ">30s %"}.issubset(data_cols):
         bucket_cols = ["0-10s %", "10-20s %", "20-30s %", ">30s %"]
     else:
         bucket_cols = ["0-2s %", "3-4s %", "4-6s %", ">6s %"]
@@ -5078,6 +5090,12 @@ def render_overview_comparison_summary(run_frames: List[Dict[str, pd.DataFrame]]
             ("20-30s %", 20.000001, 30.0),
             (">30s %", 30.000001, None),
         ]
+        cx_buckets = [
+            ("0-90sec %", None, 90.0),
+            ("90-100sec %", 90.000001, 100.0),
+            ("100-110sec %", 100.000001, 110.0),
+            (">110sec %", 110.000001, None),
+        ]
 
         api_cards: List[Tuple[str, Dict[str, float]]] = []
         ask_cards: List[Tuple[str, Dict[str, float]]] = []
@@ -5095,7 +5113,7 @@ def render_overview_comparison_summary(run_frames: List[Dict[str, pd.DataFrame]]
             if cx_ai_active or is_cx_ai_assistant_frame(frames):
                 cx_values = apis["MaxRes Time in sec"]
                 if not cx_values.dropna().empty:
-                    ask_cards.append((label, percentage_buckets(cx_values, ask_buckets)))
+                    ask_cards.append((label, percentage_buckets(cx_values, cx_buckets)))
                 continue
 
             api_values = apis.loc[~ask_mask, "MaxRes Time in sec"]
@@ -5126,7 +5144,7 @@ def render_overview_comparison_summary(run_frames: List[Dict[str, pd.DataFrame]]
 
         if not cx_ai_active:
             render_cards("API Summary", api_cards, ["0-2s %", "3-4s %", "4-6s %", ">6s %"])
-        render_cards("CX AI Assistant Summary" if cx_ai_active else "AskAI Summary", ask_cards, ["0-10s %", "10-20s %", "20-30s %", ">30s %"])
+        render_cards("CX AI Assistant Summary" if cx_ai_active else "AskAI Summary", ask_cards, ["0-90sec %", "90-100sec %", "100-110sec %", ">110sec %"] if cx_ai_active else ["0-10s %", "10-20s %", "20-30s %", ">30s %"])
 
         if not api_cards and not ask_cards:
             st.info("No summary rows found for selected API results.")
