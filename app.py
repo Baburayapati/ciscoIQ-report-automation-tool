@@ -26,7 +26,7 @@ APP_NAME_TOKEN = "CiscoIQ"
 STATIC_APP_URL = "https://ciscoiq-report-automation-application.streamlit.app/"
 
 
-SAVED_REPORT_LIMIT = 15
+SAVED_REPORT_LIMIT = 1000
 PROGRAM_SAAS = "Cisco IQ SaaS Support Services"
 PROGRAM_CX_AI_ASSISTANT = "CX AI Assistant"
 PROGRAM_ONPREM_ASSETS = "Cisco IQ Onprem - Assets"
@@ -5443,7 +5443,7 @@ def load_saved_uploads() -> List[Dict[str, str]]:
         items = data if isinstance(data, list) else []
         cleaned = normalize_saved_uploads(items)
         if len(cleaned) != len(items):
-            SAVED_REPORTS_META.write_text(json.dumps(cleaned[:SAVED_REPORT_LIMIT], indent=2), encoding="utf-8")
+            SAVED_REPORTS_META.write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
         return cleaned
     except Exception:
         return []
@@ -5650,13 +5650,10 @@ def run_display_label(frames: Dict[str, pd.DataFrame]) -> str:
 
 
 def normalize_saved_uploads(existing: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    """Remove duplicate saved reports from existing metadata and disk.
-    Duplicates are detected by file_hash first, then file_name.
-    """
+    """Normalize saved report metadata without deleting files automatically."""
     seen_hashes = set()
     seen_names = set()
     cleaned = []
-    to_remove = []
 
     for item in existing:
         file_name = item.get("file_name", "")
@@ -5683,7 +5680,6 @@ def normalize_saved_uploads(existing: List[Dict[str, str]]) -> List[Dict[str, st
             duplicate = True
 
         if duplicate:
-            to_remove.append(item)
             continue
 
         if file_hash:
@@ -5691,15 +5687,6 @@ def normalize_saved_uploads(existing: List[Dict[str, str]]) -> List[Dict[str, st
         if file_name:
             seen_names.add(file_name)
         cleaned.append(item)
-
-    # Remove duplicate physical files.
-    for item in to_remove:
-        try:
-            dup_path = SAVED_REPORTS_DIR / item.get("saved_name", "")
-            if dup_path.exists():
-                dup_path.unlink()
-        except Exception:
-            pass
 
     return cleaned
 
@@ -5769,25 +5756,6 @@ def save_uploaded_files_to_latest(uploaded_files) -> None:
         existing_names.add(clean_name)
 
     keep = existing[:SAVED_REPORT_LIMIT]
-    keep_names = {item["saved_name"] for item in keep}
-
-    for old in existing[SAVED_REPORT_LIMIT:]:
-        try:
-            old_path = SAVED_REPORTS_DIR / old.get("saved_name", "")
-            if old_path.exists():
-                old_path.unlink()
-        except Exception:
-            pass
-
-    for file_path in SAVED_REPORTS_DIR.glob("*"):
-        if not file_path.is_file() or file_path.name == SAVED_REPORTS_META.name:
-            continue
-        if file_path.name not in keep_names:
-            try:
-                file_path.unlink()
-            except Exception:
-                pass
-
     SAVED_REPORTS_META.write_text(json.dumps(keep, indent=2), encoding="utf-8")
 
     if skipped_duplicates:
@@ -5838,24 +5806,6 @@ def save_uploaded_files_for_track(uploaded_files, track_name: str, program_name:
         existing_names.add(clean_name)
 
     keep = existing[:SAVED_REPORT_LIMIT]
-    keep_names = {item["saved_name"] for item in keep}
-    for old in existing[SAVED_REPORT_LIMIT:]:
-        try:
-            old_path = SAVED_REPORTS_DIR / old.get("saved_name", "")
-            if old_path.exists():
-                old_path.unlink()
-        except Exception:
-            pass
-
-    for file_path in SAVED_REPORTS_DIR.glob("*"):
-        if not file_path.is_file() or file_path.name == SAVED_REPORTS_META.name:
-            continue
-        if file_path.name not in keep_names:
-            try:
-                file_path.unlink()
-            except Exception:
-                pass
-
     SAVED_REPORTS_META.write_text(json.dumps(keep, indent=2), encoding="utf-8")
     if skipped_duplicates:
         st.info("Duplicate upload skipped: " + ", ".join(skipped_duplicates[:3]) + (" ..." if len(skipped_duplicates) > 3 else ""))
@@ -6375,9 +6325,9 @@ def generate_dashboard_from_uploaded_csv_files(track_name: str, uploaded_files) 
 
 def render_latest_uploads_panel() -> None:
     uploads = normalize_saved_uploads(load_saved_uploads())
-    # Persist duplicate cleanup immediately so user sees clean list.
+    # Persist metadata normalization without deleting physical report files.
     try:
-        SAVED_REPORTS_META.write_text(json.dumps(uploads[:SAVED_REPORT_LIMIT], indent=2), encoding="utf-8")
+        SAVED_REPORTS_META.write_text(json.dumps(uploads, indent=2), encoding="utf-8")
     except Exception:
         pass
 
