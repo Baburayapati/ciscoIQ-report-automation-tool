@@ -54,6 +54,29 @@ def remove_cx_ai_create_rows(df: pd.DataFrame, source: str | Path, label: str = 
     return df[~df["transaction"].astype(str).str.strip().str.upper().str.startswith("CREATE")].copy()
 
 
+def sla_context_from_apis(apis_df: pd.DataFrame, is_cx_ai: bool = False) -> str:
+    if is_cx_ai:
+        return "CX AI Assistant APIs use < 10 sec SLA."
+    if apis_df.empty:
+        return "SLA thresholds are based on the API type for this program."
+    sla_values = pd.Series(dtype=float)
+    if "SLA Sec" in apis_df.columns:
+        sla_values = pd.to_numeric(apis_df["SLA Sec"], errors="coerce").dropna()
+    if sla_values.empty:
+        feature_text = apis_df.get("Feature", pd.Series("", index=apis_df.index)).astype(str).str.upper()
+        if not feature_text.empty and feature_text.str.startswith("ASKAI").all():
+            return "AskAI APIs use < 10 sec SLA."
+        return "AskAI APIs use < 10 sec SLA; Assets, Assessments, Home, Settings and Support APIs use < 2 sec SLA."
+    unique_slas = sorted({float(value) for value in sla_values.unique()})
+    if unique_slas == [10.0]:
+        return "All APIs in this report use < 10 sec SLA."
+    if unique_slas == [2.0]:
+        return "Assets, Assessments, Home, Settings and Support APIs use < 2 sec SLA."
+    if set(unique_slas).issubset({2.0, 10.0}):
+        return "AskAI APIs use < 10 sec SLA; Assets, Assessments, Home, Settings and Support APIs use < 2 sec SLA."
+    return "SLA thresholds in this report: " + ", ".join(f"< {value:g} sec" for value in unique_slas) + "."
+
+
 def split_api_name(name: str) -> Tuple[str, str, str]:
     parts = str(name).split("/")
     if len(parts) >= 3:
@@ -988,7 +1011,7 @@ def build_insights_sheet(ws, frames: Dict[str, pd.DataFrame]):
 
     ws["A15"] = "Executive Summary"
     ws["A15"].font = Font(size=14, bold=True, color="153B50")
-    sla_context = "CX AI Assistant APIs use < 10 sec SLA." if is_cx_ai else "AskAI APIs use < 10 sec SLA; Assets, Assessments, Home, Settings and Support APIs use < 2 sec SLA."
+    sla_context = sla_context_from_apis(apis_df, is_cx_ai)
     summary_points = [
         f"SLA result: {sla_pass} APIs passed and {sla_fail} APIs breached SLA.",
         f"Total executed API samples: {total_samples}.",
