@@ -855,6 +855,10 @@ def build_insights_sheet(ws, frames: Dict[str, pd.DataFrame]):
 
     apis_df = frames["APIs"].copy()
     tx_df = frames["Transactions"].copy()
+    run_info_df = frames.get("Run_Info", pd.DataFrame())
+    run_info = run_info_df.iloc[0].to_dict() if run_info_df is not None and not run_info_df.empty else {}
+    report_text = " ".join(str(run_info.get(key, "")) for key in ["Program", "Report File", "Track"])
+    is_cx_ai = is_cx_ai_assistant_report(report_text)
 
     if not apis_df.empty and "Feature" in apis_df.columns:
         apis_df = apis_df[
@@ -867,7 +871,10 @@ def build_insights_sheet(ws, frames: Dict[str, pd.DataFrame]):
     total_error_count = int(pd.to_numeric(apis_df.get("errorCount", 0), errors="coerce").fillna(0).sum()) if not apis_df.empty else 0
 
     if not apis_df.empty:
-        sla_sec_series = apis_df["Feature"].astype(str).str.upper().str.startswith("ASKAI").map({True: 10, False: 2})
+        if "SLA Sec" in apis_df.columns:
+            sla_sec_series = pd.to_numeric(apis_df["SLA Sec"], errors="coerce").fillna(10 if is_cx_ai else 2)
+        else:
+            sla_sec_series = apis_df["Feature"].astype(str).str.upper().str.startswith("ASKAI").map({True: 10, False: 10 if is_cx_ai else 2})
         avg_sec_series = pd.to_numeric(apis_df.get("Avg ResTime in sec", 0), errors="coerce").fillna(0)
         sla_pass = int((avg_sec_series < sla_sec_series).sum())
         sla_fail = int((avg_sec_series >= sla_sec_series).sum())
@@ -981,11 +988,12 @@ def build_insights_sheet(ws, frames: Dict[str, pd.DataFrame]):
 
     ws["A15"] = "Executive Summary"
     ws["A15"].font = Font(size=14, bold=True, color="153B50")
+    sla_context = "CX AI Assistant APIs use < 10 sec SLA." if is_cx_ai else "AskAI APIs use < 10 sec SLA; Assets, Assessments, Home, Settings and Support APIs use < 2 sec SLA."
     summary_points = [
         f"SLA result: {sla_pass} APIs passed and {sla_fail} APIs breached SLA.",
         f"Total executed API samples: {total_samples}.",
         f"Average API response time: {avg_resp} sec; average P95 response time: {p95_avg} sec.",
-        "AskAI APIs use < 10 sec SLA; Assets, Assessments, Home, Settings and Support APIs use < 2 sec SLA.",
+        sla_context,
         "Use the ranked tables below to identify the exact APIs behind each chart number.",
     ]
     for row_idx, point in enumerate(summary_points, start=16):

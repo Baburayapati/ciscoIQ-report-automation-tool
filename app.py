@@ -3287,8 +3287,8 @@ def dashboard_view_tabs() -> str:
     if "nav_target" in st.session_state:
         current_tab = st.session_state.pop("nav_target")
 
-    valid_tabs = ["Overview", "Track Comparison", "Detailed Report", "Defect details", "Chatbot"]
-    legacy_tabs = {"Drilldown": "Detailed Report", "Compare": "Track Comparison", "Reports": "Overview", "Trends": "Overview"}
+    valid_tabs = ["Overview", "Track Comparison", "Detailed Report", "Defect Details", "Chatbot"]
+    legacy_tabs = {"Drilldown": "Detailed Report", "Compare": "Track Comparison", "Reports": "Overview", "Trends": "Overview", "Defect details": "Defect Details"}
     current_tab = legacy_tabs.get(current_tab, current_tab)
     if current_tab not in valid_tabs:
         current_tab = "Overview"
@@ -3300,7 +3300,7 @@ def dashboard_view_tabs() -> str:
         ("Overview", "◈  Overview"),
         ("Track Comparison", "▥  Track Comparison"),
         ("Detailed Report", "▣  Detailed Report"),
-        ("Defect details", "◉  Defect details"),
+        ("Defect Details", "◉  Defect Details"),
     ]
     tab_cols = st.columns([1.05, 1.42, 1.32, 1.15], gap="small")
     for col, (tab_value, tab_label) in zip(tab_cols, tabs):
@@ -4380,7 +4380,7 @@ def render_track_comparison_dashboard(run_frames: List[Dict[str, pd.DataFrame]])
     askai_title = "CX AI Assistant Track Comparison" if st.session_state.get("active_program") == PROGRAM_CX_AI_ASSISTANT else "AskAI Track Comparison"
     st.markdown('<div class="panel-title" style="margin-top:12px;">TRACK COMPARISON DASHBOARD</div>', unsafe_allow_html=True)
     render_section(askai_title, askai_df, 320)
-    render_section("Track Comparison", other_df, 380)
+    render_section("Assets / Assessments / Home / Settings / Support Track Comparison", other_df, 380)
 
 
 def render_compare_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> None:
@@ -4765,7 +4765,8 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
     selected_tab = requested_tab or url_tab or "Overview"
     legacy_tabs = {"Drilldown": "Detailed Report", "Compare": "Track Comparison", "Reports": "Overview", "Trends": "Overview"}
     selected_tab = legacy_tabs.get(selected_tab, selected_tab)
-    if selected_tab not in ["Overview", "Track Comparison", "Detailed Report", "Test Cases Details", "Defect details", "Chatbot"]:
+    legacy_tabs["Defect details"] = "Defect Details"
+    if selected_tab not in ["Overview", "Track Comparison", "Detailed Report", "Test Cases Details", "Defect Details", "Chatbot"]:
         selected_tab = "Overview"
     st.session_state["dashboard_tab"] = selected_tab
     if requested_tab:
@@ -4794,7 +4795,7 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
     st.session_state["active_track"] = active_track
 
     tracks_html = ["API", "UI", "Cloud Assist Connector", "Customer Inventory Benchmarking"]
-    tabs_html = ["Overview", "Track Comparison", "Detailed Report", "Test Cases Details", "Defect details"]
+    tabs_html = ["Overview", "Track Comparison", "Detailed Report", "Test Cases Details", "Defect Details"]
     if active_track in {TRACK_CLOUD, TRACK_INVENTORY}:
         tabs_html = [tab for tab in tabs_html if tab != "Track Comparison"]
         if selected_tab == "Track Comparison":
@@ -4924,7 +4925,7 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
         if selected_tab == "Test Cases Details":
             render_test_cases_details_tab(selected_frames)
             return
-        if selected_tab == "Defect details":
+        if selected_tab == "Defect Details":
             render_defect_details_tab(selected_frames)
             return
         if selected_tab == "Chatbot":
