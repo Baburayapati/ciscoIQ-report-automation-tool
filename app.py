@@ -2969,7 +2969,21 @@ def apply_ui_speed_index_sla(df: pd.DataFrame) -> pd.DataFrame:
     return work
 
 
-def apply_api_sla_thresholds(df: pd.DataFrame) -> pd.DataFrame:
+def looks_like_cx_ai_api_df(df: pd.DataFrame) -> bool:
+    if df.empty:
+        return False
+    values: List[str] = []
+    for col in ["Feature", "Scenario", "Endpoint", "API"]:
+        if col in df.columns:
+            values.extend(df[col].dropna().astype(str).tolist())
+    values = [value.strip().upper() for value in values if value and value.strip().lower() != "total"]
+    if not values:
+        return False
+    cx_like = [value for value in values if re.match(r"^T\d+", value) or value.startswith("CREATE")]
+    return len(cx_like) >= max(3, int(len(values) * 0.35))
+
+
+def apply_api_sla_thresholds(df: pd.DataFrame, force_cx_ai: bool = False) -> pd.DataFrame:
     if df.empty:
         return df
     work = df.copy()
@@ -2981,6 +2995,8 @@ def apply_api_sla_thresholds(df: pd.DataFrame) -> pd.DataFrame:
     program_text = work.get("Program", pd.Series("", index=work.index)).astype(str)
     run_text = work.get("Run", pd.Series("", index=work.index)).astype(str)
     cx_ai_mask = program_text.str.upper().str.contains("CX AI ASSISTANT", regex=False, na=False) | run_text.str.upper().str.contains("CXAIASSISTANT|CX_AI_ASSISTANT|CX AI ASSISTANT", regex=True, na=False)
+    if force_cx_ai or looks_like_cx_ai_api_df(work):
+        cx_ai_mask = pd.Series(True, index=work.index)
     work["SLA Sec"] = 2.0
     work.loc[ask_mask, "SLA Sec"] = 10.0
     work.loc[cx_ai_mask, "SLA Sec"] = CX_AI_ASSISTANT_SLA_SEC
@@ -3012,20 +3028,21 @@ def remove_cx_ai_create_rows_from_frames(frames: Dict[str, pd.DataFrame]) -> Dic
     return cleaned
 
 
-def normalize_sla_for_dashboard_df(df: pd.DataFrame, track_name: str) -> pd.DataFrame:
+def normalize_sla_for_dashboard_df(df: pd.DataFrame, track_name: str, force_cx_ai: bool = False) -> pd.DataFrame:
     track_name = canonical_track_name(track_name)
     if track_name == TRACK_UI:
         return apply_ui_speed_index_sla(df)
     if track_name == TRACK_API:
-        return apply_api_sla_thresholds(df)
+        return apply_api_sla_thresholds(df, force_cx_ai=force_cx_ai)
     return df
 
 
 def normalize_sla_for_dashboard_frames(run_frames: List[Dict[str, pd.DataFrame]], track_name: str) -> List[Dict[str, pd.DataFrame]]:
     normalized = []
     for frames in run_frames:
+        is_cx_frame = is_cx_ai_assistant_frame(frames) or looks_like_cx_ai_api_df(frames.get("APIs", pd.DataFrame()))
         f = remove_cx_ai_create_rows_from_frames(dict(frames))
-        f["APIs"] = normalize_sla_for_dashboard_df(f.get("APIs", pd.DataFrame()), track_name)
+        f["APIs"] = normalize_sla_for_dashboard_df(f.get("APIs", pd.DataFrame()), track_name, force_cx_ai=is_cx_frame)
         normalized.append(f)
     return normalized
 
