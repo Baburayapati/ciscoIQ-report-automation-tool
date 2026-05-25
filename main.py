@@ -1293,6 +1293,8 @@ def write_excel(frames: Dict[str, pd.DataFrame], output_excel_path: str | Path, 
         ws.append(list(df.columns))
         for _, row in df.iterrows():
             ws.append([None if pd.isna(v) else v for v in row.tolist()])
+        if ws.max_row > 1 and ws.max_column > 1:
+            ws.auto_filter.ref = ws.dimensions
         style_sheet(ws)
 
     wb.save(output_excel_path)

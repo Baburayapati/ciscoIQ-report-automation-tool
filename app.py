@@ -5544,7 +5544,10 @@ def infer_saved_report_info(file_name: str) -> Dict[str, str]:
 
     region = "Unknown"
     for item in ["APJC", "EMEA", "US", "AMER", "EU", "LATAM", "INDIA"]:
-        if re.search(rf"(?:^|[_\-\s]){item}(?:$|[_\-\s])", upper):
+        pattern = rf"(?:^|[_\-\s]){item}(?:$|[_\-\s])"
+        if item == "US":
+            pattern = rf"(?:^|[_\-\s])US(?:$|[_\-\s]|REGION)"
+        if re.search(pattern, upper):
             region = item
             break
 
@@ -5756,6 +5759,8 @@ def save_uploaded_files_to_latest(uploaded_files) -> None:
     existing = normalize_saved_uploads(load_saved_uploads())
     existing_hashes = {item.get("file_hash") for item in existing if item.get("file_hash")}
     existing_names = {item.get("file_name") for item in existing if item.get("file_name")}
+    existing_original_names = {item.get("original_file_name") for item in existing if item.get("original_file_name")}
+    existing_original_names = {item.get("original_file_name") for item in existing if item.get("original_file_name")}
 
     skipped_duplicates = []
 
@@ -5767,7 +5772,7 @@ def save_uploaded_files_to_latest(uploaded_files) -> None:
         file_hash = hashlib.sha256(file_bytes).hexdigest()
 
         # Do not save duplicate reports. Hash match catches same content; file name catches same report uploaded again.
-        if file_hash in existing_hashes or clean_name in existing_names:
+        if file_hash in existing_hashes or clean_name in existing_names or original_name in existing_original_names:
             skipped_duplicates.append(clean_name)
             continue
 
@@ -5776,7 +5781,7 @@ def save_uploaded_files_to_latest(uploaded_files) -> None:
         saved_path = SAVED_REPORTS_DIR / saved_name
         saved_path.write_bytes(file_bytes)
 
-        info = infer_saved_report_info(clean_name)
+        info = infer_saved_report_info(original_name)
         program_name, track_name = infer_program_track(clean_name)
 
         existing.insert(0, {
@@ -5799,6 +5804,7 @@ def save_uploaded_files_to_latest(uploaded_files) -> None:
 
         existing_hashes.add(file_hash)
         existing_names.add(clean_name)
+        existing_original_names.add(original_name)
 
     keep = existing[:SAVED_REPORT_LIMIT]
     SAVED_REPORTS_META.write_text(json.dumps(keep, indent=2), encoding="utf-8")
@@ -5820,7 +5826,7 @@ def save_uploaded_files_for_track(uploaded_files, track_name: str, program_name:
         clean_name = build_standard_report_name(track_name, program_name, original_name, extension)
         file_bytes = uploaded_file.getvalue()
         file_hash = hashlib.sha256(file_bytes).hexdigest()
-        if file_hash in existing_hashes or clean_name in existing_names:
+        if file_hash in existing_hashes or clean_name in existing_names or original_name in existing_original_names:
             skipped_duplicates.append(clean_name)
             continue
 
@@ -5828,7 +5834,7 @@ def save_uploaded_files_for_track(uploaded_files, track_name: str, program_name:
         saved_name = f"{timestamp}_{clean_name}"
         saved_path = SAVED_REPORTS_DIR / saved_name
         saved_path.write_bytes(file_bytes)
-        info = infer_saved_report_info(clean_name)
+        info = infer_saved_report_info(original_name)
 
         existing.insert(0, {
             "uploaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -5849,6 +5855,7 @@ def save_uploaded_files_for_track(uploaded_files, track_name: str, program_name:
         })
         existing_hashes.add(file_hash)
         existing_names.add(clean_name)
+        existing_original_names.add(original_name)
 
     keep = existing[:SAVED_REPORT_LIMIT]
     SAVED_REPORTS_META.write_text(json.dumps(keep, indent=2), encoding="utf-8")
@@ -6915,8 +6922,6 @@ def load_static_saved_dashboard() -> bool:
 
 def dashboard_url_for_run(run_id_value: str, program: str = "", track: str = "") -> str:
     query = {"view": "dashboard"}
-    if run_id_value:
-        query["run_id"] = run_id_value
     query["tab"] = "Overview"
     if program:
         query["program"] = program
