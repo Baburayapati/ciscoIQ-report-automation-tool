@@ -205,7 +205,7 @@ def parse_report_metadata(json_path: str | Path) -> Dict[str, str]:
         else:
             duration = f"{value} Minute" if value == "1" else f"{value} Minutes"
 
-    if duration == "N/A" and is_cx_file:
+    if duration == "N/A":
         compact_duration = re.search(r"(\d+(?:\.\d+)?)(?:MINS?|MINUTES?|HRS?|HOURS?)", name, re.IGNORECASE)
         if compact_duration:
             value = compact_duration.group(1)
@@ -329,7 +329,7 @@ def order_columns(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
             "95thPercentile Resp Time in Sec",
             "99thPercentile Resp Time in Sec",
         ]
-        hidden = {"transaction", "SLA Sec", "SLA Rule", "SLA Status", "SLA Breach Sec"}
+        hidden = {"transaction", "SLA Rule", "SLA Status", "SLA Breach Sec"}
         remaining = [c for c in df.columns if c not in preferred and c not in hidden]
         return df[[c for c in preferred if c in df.columns] + remaining]
 

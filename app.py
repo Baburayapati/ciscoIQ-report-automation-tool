@@ -2747,11 +2747,13 @@ def to_mmddyyyy(date_value: str) -> str:
     parsed = extract_mmddyyyy_from_text(date_value)
     if parsed:
         return parsed
-    return datetime.now().strftime("%m%d%Y")
+    return "N/A"
 
 
 def to_mm_dd_yyyy(date_value: str) -> str:
     token = to_mmddyyyy(date_value)
+    if token == "N/A":
+        return "N/A"
     return f"{token[:2]}-{token[2:4]}-{token[4:8]}"
 
 
@@ -2794,7 +2796,8 @@ def report_title(region: str, users: str, devices: str, include_users: bool = Tr
 
 
 def saved_report_display_name(item: Dict[str, str]) -> str:
-    inferred = infer_saved_report_info(item.get("file_name", ""))
+    source_name = item.get("original_file_name") or item.get("file_name", "")
+    inferred = infer_saved_report_info(source_name)
     program = item.get("program") or infer_program_track(item.get("file_name", ""))[0]
     users = item.get("users") or inferred.get("users", "N/A")
     date = item.get("date") or inferred.get("date", "N/A")
@@ -2807,7 +2810,7 @@ def saved_report_display_name(item: Dict[str, str]) -> str:
 
     region = item.get("region") or inferred.get("region", "Unknown")
     devices = item.get("devices") or inferred.get("devices", "N/A")
-    include_users = canonical_track_name(item.get("track") or infer_program_track(item.get("file_name", ""))[1]) in {TRACK_API, TRACK_UI}
+    include_users = canonical_track_name(item.get("track") or infer_program_track(source_name)[1]) in {TRACK_API, TRACK_UI}
     return f"{report_title(region, users, devices, include_users=include_users)}-{to_mm_dd_yyyy(date)}"
 
 
@@ -4836,6 +4839,7 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
         str(frames.get("Region", region_from_frames(frames)))
         for frames in run_frames
         if frame_track_name(frames) == active_track
+        and frame_program_name(frames) == active_program
     })
     if not region_values:
         region_values = sorted({str(frames.get("Region", region_from_frames(frames))) for frames in run_frames})
