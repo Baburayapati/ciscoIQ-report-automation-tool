@@ -5500,10 +5500,7 @@ def load_saved_uploads() -> List[Dict[str, str]]:
     try:
         data = json.loads(SAVED_REPORTS_META.read_text(encoding="utf-8"))
         items = data if isinstance(data, list) else []
-        cleaned = normalize_saved_uploads(items)
-        if len(cleaned) != len(items):
-            SAVED_REPORTS_META.write_text(json.dumps(cleaned, indent=2), encoding="utf-8")
-        return cleaned
+        return normalize_saved_uploads(items, drop_duplicates=False)
     except Exception:
         return []
 
@@ -5723,8 +5720,8 @@ def run_display_label(frames: Dict[str, pd.DataFrame]) -> str:
 
 
 
-def normalize_saved_uploads(existing: List[Dict[str, str]]) -> List[Dict[str, str]]:
-    """Normalize saved report metadata without deleting files automatically."""
+def normalize_saved_uploads(existing: List[Dict[str, str]], drop_duplicates: bool = False) -> List[Dict[str, str]]:
+    """Normalize saved report metadata without deleting or hiding saved reports automatically."""
     seen_hashes = set()
     seen_names = set()
     cleaned = []
@@ -5754,13 +5751,7 @@ def normalize_saved_uploads(existing: List[Dict[str, str]]) -> List[Dict[str, st
             except Exception:
                 file_hash = ""
 
-        duplicate = False
-        if file_hash and file_hash in seen_hashes:
-            duplicate = True
-        if file_name and file_name in seen_names:
-            duplicate = True
-
-        if duplicate:
+        if drop_duplicates and ((file_hash and file_hash in seen_hashes) or (file_name and file_name in seen_names)):
             continue
 
         if file_hash:
@@ -5789,7 +5780,7 @@ def remove_saved_upload(saved_name: str) -> None:
 
 def save_uploaded_files_to_latest(uploaded_files) -> None:
     ensure_saved_reports_dir()
-    existing = normalize_saved_uploads(load_saved_uploads())
+    existing = normalize_saved_uploads(load_saved_uploads(), drop_duplicates=False)
     existing_hashes = {item.get("file_hash") for item in existing if item.get("file_hash")}
     existing_names = {item.get("file_name") for item in existing if item.get("file_name")}
     existing_original_names = {item.get("original_file_name") for item in existing if item.get("original_file_name")}
@@ -5848,9 +5839,10 @@ def save_uploaded_files_to_latest(uploaded_files) -> None:
 
 def save_uploaded_files_for_track(uploaded_files, track_name: str, program_name: str = PROGRAM_SAAS) -> None:
     ensure_saved_reports_dir()
-    existing = normalize_saved_uploads(load_saved_uploads())
+    existing = normalize_saved_uploads(load_saved_uploads(), drop_duplicates=False)
     existing_hashes = {item.get("file_hash") for item in existing if item.get("file_hash")}
     existing_names = {item.get("file_name") for item in existing if item.get("file_name")}
+    existing_original_names = {item.get("original_file_name") for item in existing if item.get("original_file_name")}
     skipped_duplicates = []
 
     for uploaded_file in uploaded_files:
@@ -6410,11 +6402,6 @@ def generate_dashboard_from_uploaded_csv_files(track_name: str, uploaded_files) 
 
 def render_latest_uploads_panel() -> None:
     uploads = normalize_saved_uploads(load_saved_uploads())
-    # Persist metadata normalization without deleting physical report files.
-    try:
-        SAVED_REPORTS_META.write_text(json.dumps(uploads, indent=2), encoding="utf-8")
-    except Exception:
-        pass
 
     st.markdown(
         """
