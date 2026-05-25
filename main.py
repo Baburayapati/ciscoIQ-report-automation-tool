@@ -102,9 +102,15 @@ def cx_ai_short_label(label: str) -> str:
     if not match:
         match = re.search(r"(?:USERS?|VU|USER)[_\-\s]*(\d+(?:\.\d+)?\s*K?)\b", text, re.IGNORECASE)
     if not match:
-        match = re.search(r"(?:^|[_\-\s])(\d+(?:\.\d+)?\s*K?)(?:[_\-\s]+|$)", text, re.IGNORECASE)
+        candidates = re.findall(r"(?:^|[_\-\s])(\d+(?:\.\d+)?\s*K?)(?:[_\-\s]+|$)", text, re.IGNORECASE)
+        for candidate in candidates:
+            normalized = candidate.replace(" ", "")
+            if re.fullmatch(r"20\d{6}|\d{10,13}", normalized):
+                continue
+            match = type("Match", (), {"group": lambda self, _: candidate})()
+            break
     users = match.group(1).replace(" ", "") if match else "N/A"
-    return f"{users}Users"
+    return f"{users} Users"
 
 
 def is_cx_ai_filename(value: str | Path) -> bool:
@@ -171,11 +177,14 @@ def parse_report_metadata(json_path: str | Path) -> Dict[str, str]:
     if devices != "N/A":
         devices = f"{devices.replace(' ', '')} Devices"
 
-    known_regions = ["APJC", "AMER", "EMEA", "LATAM", "NA", "EU", "US", "INDIA"]
+    known_regions = ["APJC", "AMER", "EMEA", "LATAM", "US", "NA", "EU", "INDIA"]
     region = "N/A"
     upper_name = name.upper()
     for candidate in known_regions:
-        if re.search(rf"(?:^|[_\-\s]){candidate}(?:$|[_\-\s])", upper_name):
+        region_pattern = rf"(?:^|[_\-\s]){candidate}(?:$|[_\-\s])"
+        if is_cx_file and candidate == "US":
+            region_pattern = rf"(?:^|[_\-\s])US(?:$|[_\-\s]|REGION)"
+        if re.search(region_pattern, upper_name):
             region = candidate
             break
     if is_cx_file and region == "NA":
@@ -184,7 +193,7 @@ def parse_report_metadata(json_path: str | Path) -> Dict[str, str]:
     # Duration: 1_Hour, 2_Hour, 1Hour, 90_Min, 30Minutes, etc.
     duration = "N/A"
     duration_match = re.search(
-        r"(\d+(?:\.\d+)?)\s*[_\-\s]*(hours?|hrs?|hr|minutes?|mins?|min)(?=$|[_\-\s])",
+        r"(\d+(?:\.\d+)?)\s*[_\-\s]*(hours?|hrs?|hr|minutes?|mins?|min)(?=$|[_\-\s]|region)",
         name,
         re.IGNORECASE,
     )
@@ -287,7 +296,12 @@ def add_api_sla_columns(apis_df: pd.DataFrame, source: str | Path = "", label: s
     def row_pass(row: pd.Series) -> str:
         threshold = float(row["SLA Sec"])
         avg_v = float(pd.to_numeric(row.get("Avg ResTime in sec"), errors="coerce") or 0)
-        return "PASS" if avg_v <= threshold else "FAIL"
+        if source_is_cx:
+            return "PASS" if avg_v <= threshold else "FAIL"
+        min_v = float(pd.to_numeric(row.get("Min ResTime in sec"), errors="coerce") or 0)
+        max_v = float(pd.to_numeric(row.get("MaxRes Time in sec"), errors="coerce") or 0)
+        p95_v = float(pd.to_numeric(row.get("95thPercentile Resp Time in Sec"), errors="coerce") or 0)
+        return "PASS" if (avg_v <= threshold and min_v <= threshold and max_v <= threshold and p95_v <= threshold) else "FAIL"
 
     apis_df["SLA Status"] = apis_df.apply(row_pass, axis=1)
     apis_df["SLA Breach Sec"] = apis_df.apply(
@@ -850,12 +864,12 @@ def style_sheet(ws):
                     continue
                 for col_idx in range(3, ws.max_column + 1):
                     header = str(ws.cell(row=2, column=col_idx).value or "")
-                    if header in {"90-100sec %", "100-110sec %", ">110sec %"}:
+                    if header == "Max Seconds":
                         try:
                             value = float(ws.cell(row=row_idx, column=col_idx).value or 0)
                         except Exception:
                             continue
-                        if value > 0:
+                        if value > 90:
                             cell = ws.cell(row=row_idx, column=col_idx)
                             cell.fill = PatternFill("solid", fgColor="FFC7CE")
                             cell.font = Font(color="9C0006", bold=True)

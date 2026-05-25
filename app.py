@@ -4746,11 +4746,11 @@ def render_dashboard_excel_report_actions(region_focus: str = "All") -> None:
         st.markdown(f'<div class="excel-only-name">{display_name}</div>', unsafe_allow_html=True)
         if saved_path.exists():
             try:
-                excel_bytes_for_download = cached_excel_bytes_for_saved_api_v3(
+                excel_bytes_for_download = cached_excel_bytes_for_saved_api_v4(
                     str(saved_path),
                     display_name,
                     saved_path.stat().st_mtime,
-                    original_name,
+                    item.get("original_file_name") or original_name,
                 )
                 st.download_button(
                     "Download Excel Report",
@@ -5505,7 +5505,7 @@ def cached_excel_bytes_for_saved_api(saved_path_str: str, display_name: str, mti
         return output_path.read_bytes()
 
 
-def cached_excel_bytes_for_saved_api_v3(saved_path_str: str, display_name: str, mtime: float, source_label: str = "") -> bytes:
+def cached_excel_bytes_for_saved_api_v4(saved_path_str: str, display_name: str, mtime: float, source_label: str = "") -> bytes:
     return cached_excel_bytes_for_saved_api(saved_path_str, display_name, mtime, source_label)
 
 def compact_saved_file_label(file_name: str) -> str:
@@ -6573,11 +6573,11 @@ def render_excel_reports_grouped_by_program() -> None:
                 with col_download:
                     if saved_path.exists():
                         try:
-                            excel_bytes_for_download = cached_excel_bytes_for_saved_api_v3(
+                            excel_bytes_for_download = cached_excel_bytes_for_saved_api_v4(
                                 str(saved_path),
                                 display_name,
                                 saved_path.stat().st_mtime,
-                                item.get("file_name", saved_path.name),
+                                item.get("original_file_name") or item.get("file_name", saved_path.name),
                             )
                             st.download_button(
                                 "Download Excel Report",
@@ -6678,7 +6678,7 @@ def render_saved_reports_compact_for_track(track_name: str, title: str | None = 
             if action_generate_col.button("Generate Results", key=f"{key_prefix}_compact_generate_{index}_{item.get('saved_name','')}", use_container_width=True):
                 try:
                     if track_name == TRACK_API:
-                        generate_dashboard_from_json_paths([file_path], [Path(item.get("file_name", file_path.name)).stem])
+                        generate_dashboard_from_json_paths([file_path], [Path(item.get("original_file_name") or item.get("file_name", file_path.name)).stem])
                     else:
                         generate_dashboard_from_saved_csv(track_name, file_path, item)
                     st.success(f"Generated {track_name} results for {item.get('file_name', file_path.name)}")
@@ -6687,11 +6687,11 @@ def render_saved_reports_compact_for_track(track_name: str, title: str | None = 
                     st.error(f"Failed to generate saved report: {exc}")
             if action_download_col is not None:
                 try:
-                    excel_bytes_for_download = cached_excel_bytes_for_saved_api_v3(
+                    excel_bytes_for_download = cached_excel_bytes_for_saved_api_v4(
                         str(file_path),
                         report_name,
                         file_path.stat().st_mtime,
-                        item.get("file_name", file_path.name),
+                        item.get("original_file_name") or item.get("file_name", file_path.name),
                     )
                     action_download_col.download_button(
                         "Download Excel",
@@ -7118,7 +7118,7 @@ elif team_upload_view:
                     path.write_bytes(uploaded_file.getvalue())
                     json_paths.append(path)
                     label = Path(uploaded_file.name).stem
-                    labels.append(label)
+                    labels.append(original_name)
                     run_frames.append(process_uploaded_file(path, label))
                 output_path = tmpdir / "JMeter_Report.xlsx"
                 try:
