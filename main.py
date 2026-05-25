@@ -780,7 +780,10 @@ def style_sheet(ws):
             value = "" if cell.value is None else str(cell.value)
             max_len = max(max_len, len(value))
         width = min(max(max_len + 2, 12), 45)
-        ws.column_dimensions[get_column_letter(col_idx)].width = width
+        if ws.cell(row=1, column=col_idx).value == "__SLA Sec":
+            ws.column_dimensions[get_column_letter(col_idx)].hidden = True
+        else:
+            ws.column_dimensions[get_column_letter(col_idx)].width = width
 
 
 
@@ -815,6 +818,7 @@ def style_sheet(ws):
 
     # Track_Comparison Total row styling.
     if ws.title == "Track_Comparison":
+        cx_section = any(str(ws.cell(row=row_idx, column=1).value or "").startswith("CX AI Assistant") for row_idx in range(1, ws.max_row + 1))
         for row_idx in range(1, ws.max_row + 1):
             first_val = str(ws.cell(row=row_idx, column=1).value or "")
             if first_val == "Total":
@@ -823,11 +827,27 @@ def style_sheet(ws):
                     cell.fill = PatternFill("solid", fgColor="FFF2CC")
                     cell.font = Font(color="000000", bold=True)
                     cell.alignment = Alignment(horizontal="center" if col_idx > 1 else "left", vertical="center", wrap_text=True)
+        if cx_section:
+            for row_idx in range(1, ws.max_row + 1):
+                metric_name = str(ws.cell(row=row_idx, column=2).value or "")
+                if metric_name not in {"Avg", "Min", "Max"}:
+                    continue
+                for col_idx in range(3, ws.max_column + 1):
+                    header = str(ws.cell(row=2, column=col_idx).value or "")
+                    if header in {"90-100sec %", "100-110sec %", ">110sec %"}:
+                        try:
+                            value = float(ws.cell(row=row_idx, column=col_idx).value or 0)
+                        except Exception:
+                            continue
+                        if value > 0:
+                            cell = ws.cell(row=row_idx, column=col_idx)
+                            cell.fill = PatternFill("solid", fgColor="FFC7CE")
+                            cell.font = Font(color="9C0006", bold=True)
 
     # Highlight only response-time cells that breach SLA in APIs sheet.
     headers = [cell.value for cell in ws[1]]
-    if ws.title == "APIs" and "SLA Sec" in headers:
-        sla_col = headers.index("SLA Sec") + 1
+    if ws.title == "APIs" and ("SLA Sec" in headers or "__SLA Sec" in headers):
+        sla_col = headers.index("SLA Sec") + 1 if "SLA Sec" in headers else headers.index("__SLA Sec") + 1
         sla_status_col = headers.index("SLA Status") + 1 if "SLA Status" in headers else None
         response_time_columns = [
             "Avg ResTime in sec",
@@ -865,40 +885,8 @@ def style_sheet(ws):
                 elif status_cell.value == "FAIL":
                     status_cell.fill = PatternFill("solid", fgColor="FFC7CE")
                     status_cell.font = Font(color="9C0006", bold=True)
-
-
-    # APIs: highlight ONLY response-time metric cells that breach SLA.
-    # AskAI Feature => 10 sec SLA. Other tracks => 2 sec SLA.
-    if ws.title == "APIs":
-        headers = [cell.value for cell in ws[1]]
-        metric_cols = []
-        for col_name in [
-            "Avg ResTime in sec",
-            "Min ResTime in sec",
-            "MaxRes Time in sec",
-            "90thPercentile Resp Time in Sec",
-            "95thPercentile Resp Time in Sec",
-            "99thPercentile Resp Time in Sec",
-        ]:
-            if col_name in headers:
-                metric_cols.append(headers.index(col_name) + 1)
-
-        feature_col = headers.index("Feature") + 1 if "Feature" in headers else (headers.index("Tracks") + 1 if "Tracks" in headers else None)
-
-        if feature_col and metric_cols:
-            for row in range(2, ws.max_row + 1):
-                feature = str(ws.cell(row=row, column=feature_col).value or "")
-                sla_sec = 10 if feature.upper().startswith("ASKAI") else 2
-
-                for col in metric_cols:
-                    cell = ws.cell(row=row, column=col)
-                    try:
-                        value = float(cell.value)
-                    except Exception:
-                        continue
-                    if value >= sla_sec:
-                        cell.fill = PatternFill("solid", fgColor="FFC7CE")
-                        cell.font = Font(color="9C0006", bold=True)
+        if "__SLA Sec" in headers:
+            ws.column_dimensions[get_column_letter(headers.index("__SLA Sec") + 1)].hidden = True
 
 
     # APIs_Comparison: format response-time, error, and diff columns.
@@ -1257,6 +1245,9 @@ def write_excel(frames: Dict[str, pd.DataFrame], output_excel_path: str | Path, 
         ws = wb.create_sheet(sheet_name)
         df = frames[sheet_name]
         if sheet_name == "APIs":
+            if "SLA Sec" in df.columns:
+                df = df.copy()
+                df["__SLA Sec"] = df["SLA Sec"]
             df = df.drop(
                 columns=[c for c in ["SLA Sec", "SLA Rule", "SLA Status", "SLA Breach Sec"] if c in df.columns],
                 errors="ignore",
