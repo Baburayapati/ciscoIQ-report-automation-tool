@@ -41,7 +41,7 @@ def is_cx_ai_assistant_report(value: str | Path) -> bool:
 
 def is_cx_ai_transaction_name(name: str) -> bool:
     text = str(name or "").strip().upper()
-    return bool(re.match(r"^T\d+", text)) or text.startswith("CREATE")
+    return bool(re.match(r"^T(?:\d+|[_\-])", text)) or text.startswith("CREATE")
 
 
 def cx_ai_source_text(source: str | Path, label: str = "") -> str:
@@ -1290,7 +1290,7 @@ def write_excel(frames: Dict[str, pd.DataFrame], output_excel_path: str | Path, 
             if {"Transactions", "Endpoint"}.issubset(df.columns):
                 tx_empty = df["Transactions"].fillna("").astype(str).str.strip().eq("").all()
                 endpoint_empty = df["Endpoint"].fillna("").astype(str).str.strip().eq("").all()
-                cx_like = df.get("Tracks", pd.Series(dtype=str)).astype(str).str.match(r"^T\d+", na=False).sum() >= 3
+                cx_like = df.get("Tracks", pd.Series(dtype=str)).astype(str).str.match(r"^T(?:\d+|[_\-])", na=False).sum() >= 3
                 if cx_like and tx_empty:
                     df = df.drop(columns=["Transactions"], errors="ignore")
                 if cx_like and endpoint_empty:

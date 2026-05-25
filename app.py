@@ -2985,7 +2985,7 @@ def looks_like_cx_ai_api_df(df: pd.DataFrame) -> bool:
     values = [value.strip().upper() for value in values if value and value.strip().lower() != "total"]
     if not values:
         return False
-    cx_like = [value for value in values if re.match(r"^T\d+", value) or value.startswith("CREATE")]
+    cx_like = [value for value in values if re.match(r"^T(?:\d+|[_\-])", value) or value.startswith("CREATE")]
     return len(cx_like) >= max(3, int(len(values) * 0.35))
 
 
