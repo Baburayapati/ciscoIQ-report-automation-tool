@@ -110,7 +110,9 @@ def cx_ai_short_label(label: str) -> str:
             match = type("Match", (), {"group": lambda self, _: candidate})()
             break
     users = match.group(1).replace(" ", "") if match else "N/A"
-    return f"{users} Users"
+    metadata = parse_report_metadata(label)
+    date = metadata.get("Date", "N/A")
+    return f"{users} Users - {date}" if date != "N/A" else f"{users} Users"
 
 
 def is_cx_ai_filename(value: str | Path) -> bool:

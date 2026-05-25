@@ -5695,7 +5695,12 @@ def run_display_label(frames: Dict[str, pd.DataFrame]) -> str:
     if track_name == TRACK_UI:
         return f"{users_clean}Users-{devices_clean}Devices"
     if is_cx_ai_assistant_frame(frames):
-        return f"{users_clean}Users"
+        date = info.get("date", "N/A")
+        run_info = frames.get("Run_Info")
+        if (not date or date == "N/A") and run_info is not None and not run_info.empty:
+            date = str(run_info.iloc[0].to_dict().get("Date", "N/A"))
+        date_label = to_mm_dd_yyyy(date)
+        return f"{users_clean}Users-{date_label}" if date_label != "N/A" else f"{users_clean}Users"
 
     return f"{region_clean}-{users_clean}VU-{devices_clean}"
 
@@ -6900,16 +6905,19 @@ def load_saved_dashboard_frames() -> List[Dict[str, pd.DataFrame]]:
 
 
 def load_static_saved_dashboard() -> bool:
+    uploads = normalize_saved_uploads(load_saved_uploads())
+    signature = "|".join(
+        f"{item.get('saved_name','')}:{item.get('file_hash','')}:{item.get('original_file_name','')}:{item.get('region','')}:{item.get('date','')}:{item.get('duration','')}:{(SAVED_REPORTS_DIR / item.get('saved_name','')).stat().st_mtime_ns}"
+        for item in uploads
+        if (SAVED_REPORTS_DIR / item.get("saved_name", "")).exists()
+    )
+    if st.session_state.get("saved_dashboard_signature") == signature and st.session_state.get("run_frames"):
+        return True
+
     frames = load_saved_dashboard_frames()
     if not frames:
         return False
 
-    uploads = normalize_saved_uploads(load_saved_uploads())
-    signature = "|".join(
-        f"{item.get('saved_name','')}:{(SAVED_REPORTS_DIR / item.get('saved_name','')).stat().st_mtime_ns}"
-        for item in uploads
-        if (SAVED_REPORTS_DIR / item.get("saved_name", "")).exists()
-    )
     st.session_state["run_frames"] = frames
     st.session_state["excel_bytes"] = st.session_state.get("excel_bytes")
     st.session_state["report_file_name"] = "JMeter_Report.xlsx"
@@ -6932,13 +6940,7 @@ def load_static_saved_dashboard() -> bool:
 
 
 def dashboard_url_for_run(run_id_value: str, program: str = "", track: str = "") -> str:
-    query = {"view": "dashboard"}
-    query["tab"] = "Overview"
-    if program:
-        query["program"] = program
-    if track:
-        query["track"] = track
-    return "?" + urlencode(query)
+    return "?view=dashboard"
 
 
 def render_floating_chatbot_icon() -> None:
