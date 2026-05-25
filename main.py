@@ -98,11 +98,19 @@ def looks_like_cx_ai_apis(apis_df: pd.DataFrame) -> bool:
 
 def cx_ai_short_label(label: str) -> str:
     text = str(label or "")
-    match = re.search(r"(\d+(?:\.\d+)?\s*K?)\s*[_\-\s]*(?:USERS?|VU)\b", text, re.IGNORECASE)
+    match = re.search(r"(\d+(?:\.\d+)?\s*K?)\s*[_\-\s]*(?:USERS?|VU|USER)\b", text, re.IGNORECASE)
     if not match:
-        match = re.search(r"(?:USERS?|VU)[_\-\s]*(\d+(?:\.\d+)?\s*K?)\b", text, re.IGNORECASE)
+        match = re.search(r"(?:USERS?|VU|USER)[_\-\s]*(\d+(?:\.\d+)?\s*K?)\b", text, re.IGNORECASE)
+    if not match:
+        match = re.search(r"(?:^|[_\-\s])(\d+(?:\.\d+)?\s*K?)(?:[_\-\s]+|$)", text, re.IGNORECASE)
     users = match.group(1).replace(" ", "") if match else "N/A"
     return f"{users}Users"
+
+
+def is_cx_ai_filename(value: str | Path) -> bool:
+    text = str(value or "")
+    normalized = re.sub(r"[^A-Z0-9]", "", text.upper())
+    return "CXAIASSISTANT" in normalized or "CXAI" in normalized
 
 
 def split_api_name(name: str) -> Tuple[str, str, str]:
@@ -141,14 +149,17 @@ def parse_report_metadata(json_path: str | Path) -> Dict[str, str]:
 
     filename = Path(json_path).name
     name = Path(json_path).stem
+    is_cx_file = is_cx_ai_filename(name)
 
     def find_or_na(pattern: str, group: int = 1, flags: int = re.IGNORECASE) -> str:
         match = re.search(pattern, name, flags)
         return match.group(group) if match else "N/A"
 
     users = find_or_na(r"(\d+)\s*[_\-\s]*Users?")
+    if users == "N/A" and is_cx_file:
+        users = find_or_na(r"(?:^|[_\-\s])(\d+(?:\.\d+)?\s*K?)(?:[_\-\s]+|$)")
     if users != "N/A":
-        users = f"{users} Users"
+        users = f"{str(users).replace(' ', '')} Users"
 
     devices = find_or_na(r"(\d+(?:\.\d+)?\s*K?)\s*[_\-\s]*Devices?")
     if devices != "N/A":
@@ -176,6 +187,16 @@ def parse_report_metadata(json_path: str | Path) -> Dict[str, str]:
             duration = f"{value} Hour" if value == "1" else f"{value} Hours"
         else:
             duration = f"{value} Minute" if value == "1" else f"{value} Minutes"
+
+    if duration == "N/A" and is_cx_file:
+        compact_duration = re.search(r"(\d+(?:\.\d+)?)(?:MINS?|MINUTES?|HRS?|HOURS?)", name, re.IGNORECASE)
+        if compact_duration:
+            value = compact_duration.group(1)
+            token = compact_duration.group(0).upper()
+            if "H" in token:
+                duration = f"{value} Hour" if value == "1" else f"{value} Hours"
+            else:
+                duration = f"{value} Minute" if value == "1" else f"{value} Minutes"
 
     # Date from Month-Day-Year / MonthDayYear / Month-Day / MonthDay.
     month_pattern = (
@@ -832,7 +853,7 @@ def style_sheet(ws):
                 except (TypeError, ValueError):
                     continue
 
-                if metric_value >= sla_value:
+                if metric_value > sla_value:
                     cell.fill = PatternFill("solid", fgColor="FFC7CE")
                     cell.font = Font(color="9C0006", bold=True)
 
@@ -1001,7 +1022,7 @@ def build_insights_sheet(ws, frames: Dict[str, pd.DataFrame]):
     ws["A8"].font = Font(size=14, bold=True, color="153B50")
     ws["A8"].alignment = Alignment(horizontal="left", vertical="center")
 
-    context_headers = ["Concurrent Users", "Devices Count", "Date", "Duration", "Region"]
+    context_headers = ["Concurrent Users", "Date", "Duration", "Region"] if is_cx_ai else ["Concurrent Users", "Devices Count", "Date", "Duration", "Region"]
     for idx, header in enumerate(context_headers, start=1):
         header_cell = ws.cell(row=9, column=idx, value=header)
         header_cell.font = Font(bold=True, color="153B50")
