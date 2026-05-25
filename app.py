@@ -7118,12 +7118,12 @@ elif team_upload_view:
                     path.write_bytes(uploaded_file.getvalue())
                     json_paths.append(path)
                     label = Path(uploaded_file.name).stem
-                    labels.append(original_name)
+                    labels.append(uploaded_file.name.replace(" ", "_"))
                     run_frames.append(process_uploaded_file(path, label))
                 output_path = tmpdir / "JMeter_Report.xlsx"
                 try:
                     if len(json_paths) == 1:
-                        build_report(json_paths[0], output_path)
+                        build_report_with_label(json_paths[0], output_path, labels[0])
                     else:
                         build_comparison_report(json_paths, labels, output_path)
                     run_frames = add_region_to_frames(run_frames)
