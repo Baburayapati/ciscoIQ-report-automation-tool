@@ -19,7 +19,7 @@ import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
 
-from main import build_report, build_comparison_report, build_single_report_frames
+from main import build_report, build_report_with_label, build_comparison_report, build_single_report_frames
 
 APP_TITLE = "CiscoIQ Performance Report App"
 APP_NAME_TOKEN = "CiscoIQ"
@@ -4746,10 +4746,11 @@ def render_dashboard_excel_report_actions(region_focus: str = "All") -> None:
         st.markdown(f'<div class="excel-only-name">{display_name}</div>', unsafe_allow_html=True)
         if saved_path.exists():
             try:
-                excel_bytes_for_download = cached_excel_bytes_for_saved_api_v2(
+                excel_bytes_for_download = cached_excel_bytes_for_saved_api_v3(
                     str(saved_path),
                     display_name,
                     saved_path.stat().st_mtime,
+                    original_name,
                 )
                 st.download_button(
                     "Download Excel Report",
@@ -5490,19 +5491,22 @@ def load_saved_uploads() -> List[Dict[str, str]]:
 
 
 @st.cache_data(show_spinner=False)
-def cached_excel_bytes_for_saved_api(saved_path_str: str, display_name: str, mtime: float) -> bytes:
+def cached_excel_bytes_for_saved_api(saved_path_str: str, display_name: str, mtime: float, source_label: str = "") -> bytes:
     """Build Excel bytes for one saved API JSON file and cache by path/name/mtime."""
     saved_path = Path(saved_path_str)
     with tempfile.TemporaryDirectory() as tmpdir:
         temp_json_path = Path(tmpdir) / saved_path.name
         temp_json_path.write_bytes(saved_path.read_bytes())
         output_path = Path(tmpdir) / f"{display_name}.xlsx"
-        build_report(temp_json_path, output_path)
+        if source_label:
+            build_report_with_label(temp_json_path, output_path, Path(source_label).stem)
+        else:
+            build_report(temp_json_path, output_path)
         return output_path.read_bytes()
 
 
-def cached_excel_bytes_for_saved_api_v2(saved_path_str: str, display_name: str, mtime: float) -> bytes:
-    return cached_excel_bytes_for_saved_api(saved_path_str, display_name, mtime)
+def cached_excel_bytes_for_saved_api_v3(saved_path_str: str, display_name: str, mtime: float, source_label: str = "") -> bytes:
+    return cached_excel_bytes_for_saved_api(saved_path_str, display_name, mtime, source_label)
 
 def compact_saved_file_label(file_name: str) -> str:
     """Return short report label similar to Reports tab: Region-Users-Devices-Date."""
@@ -6569,10 +6573,11 @@ def render_excel_reports_grouped_by_program() -> None:
                 with col_download:
                     if saved_path.exists():
                         try:
-                            excel_bytes_for_download = cached_excel_bytes_for_saved_api_v2(
+                            excel_bytes_for_download = cached_excel_bytes_for_saved_api_v3(
                                 str(saved_path),
                                 display_name,
                                 saved_path.stat().st_mtime,
+                                item.get("file_name", saved_path.name),
                             )
                             st.download_button(
                                 "Download Excel Report",
@@ -6682,10 +6687,11 @@ def render_saved_reports_compact_for_track(track_name: str, title: str | None = 
                     st.error(f"Failed to generate saved report: {exc}")
             if action_download_col is not None:
                 try:
-                    excel_bytes_for_download = cached_excel_bytes_for_saved_api_v2(
+                    excel_bytes_for_download = cached_excel_bytes_for_saved_api_v3(
                         str(file_path),
                         report_name,
                         file_path.stat().st_mtime,
+                        item.get("file_name", file_path.name),
                     )
                     action_download_col.download_button(
                         "Download Excel",

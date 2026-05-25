@@ -157,7 +157,13 @@ def parse_report_metadata(json_path: str | Path) -> Dict[str, str]:
 
     users = find_or_na(r"(\d+)\s*[_\-\s]*Users?")
     if users == "N/A" and is_cx_file:
-        users = find_or_na(r"(?:^|[_\-\s])(\d+(?:\.\d+)?\s*K?)(?:[_\-\s]+|$)")
+        user_candidates = re.findall(r"(?:^|[_\-\s])(\d+(?:\.\d+)?\s*K?)(?:[_\-\s]+|$)", name, re.IGNORECASE)
+        for candidate in user_candidates:
+            normalized_candidate = candidate.replace(" ", "")
+            if re.fullmatch(r"20\d{6}|\d{10,13}", normalized_candidate):
+                continue
+            users = candidate
+            break
     if users != "N/A":
         users = f"{str(users).replace(' ', '')} Users"
 
@@ -172,6 +178,8 @@ def parse_report_metadata(json_path: str | Path) -> Dict[str, str]:
         if re.search(rf"(?:^|[_\-\s]){candidate}(?:$|[_\-\s])", upper_name):
             region = candidate
             break
+    if is_cx_file and region == "NA":
+        region = "N/A"
 
     # Duration: 1_Hour, 2_Hour, 1Hour, 90_Min, 30Minutes, etc.
     duration = "N/A"
@@ -595,6 +603,14 @@ def build_report(json_path: str | Path, output_excel_path: str | Path) -> None:
     label = Path(json_path).stem
     frames = build_single_report_frames(json_path, label)
     track_matrix = build_track_comparison_matrix([json_path], [Path(json_path).stem])
+    write_excel(frames, output_excel_path, track_matrix=track_matrix)
+
+
+def build_report_with_label(json_path: str | Path, output_excel_path: str | Path, label: str) -> None:
+    frames = build_single_report_frames(json_path, label)
+    if "Run_Info" in frames and frames["Run_Info"] is not None and not frames["Run_Info"].empty:
+        frames["Run_Info"] = pd.DataFrame([parse_report_metadata(label)])
+    track_matrix = build_track_comparison_matrix([json_path], [label])
     write_excel(frames, output_excel_path, track_matrix=track_matrix)
 
 
