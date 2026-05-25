@@ -1417,10 +1417,26 @@ body:has(.upload-left-panel-marker) .upload-page-quick-row {
 }
 
 .report-program-title {
-  font-size: 22px !important;
+  font-size: 20px !important;
   font-weight: 950 !important;
   color: #0f2b68 !important;
   margin-bottom: 14px !important;
+}
+
+.saved-report-program-heading {
+  font-size: 20px !important;
+  line-height: 1.16 !important;
+  font-weight: 900 !important;
+  color: #0f172a !important;
+  margin: 8px 0 16px 0 !important;
+}
+
+.saved-report-track-heading {
+  font-size: 16px !important;
+  line-height: 1.2 !important;
+  font-weight: 850 !important;
+  color: #0f2b68 !important;
+  margin: 6px 0 10px 0 !important;
 }
 
 .report-program-card .panel-title,
@@ -1455,7 +1471,7 @@ body:has(.upload-left-panel-marker) .upload-page-quick-row {
 }
 
 body:has(.upload-left-panel-marker) .report-program-title {
-  font-size: 22px !important;
+  font-size: 20px !important;
   font-weight: 950 !important;
   color: #0f2b68 !important;
   margin-bottom: 14px !important;
@@ -6586,7 +6602,7 @@ def render_excel_reports_grouped_by_program() -> None:
             return
 
         for program_name, items in grouped_saved_uploads_by_program(api_uploads).items():
-            st.markdown(f"### {saved_report_program_heading(program_name)}")
+            st.markdown(f'<div class="saved-report-program-heading">{html.escape(saved_report_program_heading(program_name))}</div>', unsafe_allow_html=True)
             for idx, item in enumerate(items, start=1):
                 saved_name = item.get("saved_name", "")
                 saved_path = SAVED_REPORTS_DIR / saved_name
@@ -6638,7 +6654,7 @@ def render_saved_reports_grouped_by_program() -> None:
     }
     for program_name, items in grouped_saved_uploads_by_program(uploads).items():
         with st.container(border=True):
-            st.markdown(f"## {saved_report_program_heading(program_name)}")
+            st.markdown(f'<div class="saved-report-program-heading">{html.escape(saved_report_program_heading(program_name))}</div>', unsafe_allow_html=True)
             for track_name, track_title in track_titles.items():
                 track_items = [
                     item for item in items
@@ -6646,7 +6662,7 @@ def render_saved_reports_grouped_by_program() -> None:
                 ]
                 if not track_items:
                     continue
-                st.markdown(f"### {track_title}")
+                st.markdown(f'<div class="saved-report-track-heading">{html.escape(track_title)}</div>', unsafe_allow_html=True)
                 render_saved_reports_compact_for_track(track_name, title="", key_prefix=f"reports_{sanitize_token(program_name)}_{sanitize_token(track_name)}", uploads=track_items)
 
 
