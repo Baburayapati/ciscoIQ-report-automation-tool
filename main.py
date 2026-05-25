@@ -258,10 +258,7 @@ def add_api_sla_columns(apis_df: pd.DataFrame, source: str | Path = "", label: s
     def row_pass(row: pd.Series) -> str:
         threshold = float(row["SLA Sec"])
         avg_v = float(pd.to_numeric(row.get("Avg ResTime in sec"), errors="coerce") or 0)
-        min_v = float(pd.to_numeric(row.get("Min ResTime in sec"), errors="coerce") or 0)
-        max_v = float(pd.to_numeric(row.get("MaxRes Time in sec"), errors="coerce") or 0)
-        p95_v = float(pd.to_numeric(row.get("95thPercentile Resp Time in Sec"), errors="coerce") or 0)
-        return "PASS" if (avg_v <= threshold and min_v <= threshold and max_v <= threshold and p95_v <= threshold) else "FAIL"
+        return "PASS" if avg_v <= threshold else "FAIL"
 
     apis_df["SLA Status"] = apis_df.apply(row_pass, axis=1)
     apis_df["SLA Breach Sec"] = apis_df.apply(
@@ -394,7 +391,7 @@ def track_metric_values(df: pd.DataFrame, track: str, metric: str, force_askai_b
         "Min": "min_sec",
         "Max": "max_sec",
     }
-    col = metric_to_col[metric]
+    col = "avg_sec" if force_cx_buckets else metric_to_col[metric]
     is_askai = force_askai_buckets or str(track).upper().startswith("ASKAI") or is_cx_ai_assistant_report(track)
 
     total_apis = len(g)
@@ -446,7 +443,7 @@ def build_track_comparison_matrix(json_paths: List[str | Path], labels: List[str
             "Min": "min_sec",
             "Max": "max_sec",
         }
-        col = metric_to_col[metric]
+        col = "avg_sec" if cx_ai_report else metric_to_col[metric]
 
         is_askai_section = cx_ai_report or all(str(track).upper().startswith("ASKAI") for track in tracks)
         values = pd.to_numeric(g[col], errors="coerce").dropna()

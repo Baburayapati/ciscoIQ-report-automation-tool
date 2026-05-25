@@ -4968,7 +4968,7 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
         if active_track == TRACK_INVENTORY:
             render_inventory_benchmark_dashboard(selected_frames_for_sla)
             return
-        df = cached_combined_df(selected_frames_for_sla)
+        df = combined_df(selected_frames_for_sla)
         render_aggregated_or_comparison_summary(selected_frames_for_sla)
 
         st.markdown('<div class="grid-3">', unsafe_allow_html=True)
@@ -5120,7 +5120,8 @@ def render_overview_comparison_summary(run_frames: List[Dict[str, pd.DataFrame]]
         for frames in frames_list:
             frames = remove_cx_ai_create_rows_from_frames(frames)
             apis = frames.get("APIs", pd.DataFrame())
-            if apis is None or apis.empty or "MaxRes Time in sec" not in apis.columns:
+            required_col = "Avg ResTime in sec" if cx_ai_active or is_cx_ai_assistant_frame(frames) else "MaxRes Time in sec"
+            if apis is None or apis.empty or required_col not in apis.columns:
                 continue
 
             feature_series = apis.get("Feature", pd.Series(index=apis.index, dtype=str)).astype(str)
@@ -5128,7 +5129,7 @@ def render_overview_comparison_summary(run_frames: List[Dict[str, pd.DataFrame]]
 
             label = run_display_label(frames)
             if cx_ai_active or is_cx_ai_assistant_frame(frames):
-                cx_values = apis["MaxRes Time in sec"]
+                cx_values = apis["Avg ResTime in sec"]
                 if not cx_values.dropna().empty:
                     ask_cards.append((label, percentage_buckets(cx_values, cx_buckets)))
                 continue
