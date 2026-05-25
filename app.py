@@ -2759,7 +2759,10 @@ def to_mm_dd_yyyy(date_value: str) -> str:
 
 def build_standard_report_name(track_name: str, program_name: str, original_name: str, extension: str) -> str:
     info = infer_saved_report_info(original_name)
-    date_token = to_mmddyyyy(info.get("date", "") or original_name)
+    date_token = sanitize_token(to_mmddyyyy(info.get("date", "") or original_name)).upper()
+    if date_token in {"N-A", "NA", "N"}:
+        parsed_from_name = extract_mmddyyyy_from_text(original_name)
+        date_token = parsed_from_name or "NA"
     epoch_token = f"EPOC-{int(datetime.now().timestamp())}"
     users_token = normalize_users_token(info.get("users", "N/A"))
     devices_token = normalize_devices_token(info.get("devices", "N/A"))
