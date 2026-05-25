@@ -4844,8 +4844,6 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
         if frame_track_name(frames) == active_track
         and frame_program_name(frames) == active_program
     })
-    if not region_values:
-        region_values = sorted({str(frames.get("Region", region_from_frames(frames))) for frames in run_frames})
     region_values = [r for r in region_values if r and r != "Unknown"]
     region_options = ["All"] + region_values
 
@@ -5718,6 +5716,13 @@ def normalize_saved_uploads(existing: List[Dict[str, str]]) -> List[Dict[str, st
         program_name = item.get("program") or infer_program_track(file_name)[0]
         if not item.get("program"):
             item["program"] = program_name
+
+        original_name = item.get("original_file_name") or file_name
+        original_info = infer_saved_report_info(original_name)
+        for key in ["region", "date", "duration", "users", "devices"]:
+            current_value = str(item.get(key, "") or "")
+            if not current_value or current_value.upper() in {"N/A", "NA", "UNKNOWN"}:
+                item[key] = original_info.get(key, item.get(key, "N/A"))
 
         # Backfill hash for older saved files if missing.
         saved_path = SAVED_REPORTS_DIR / saved_name
@@ -6818,15 +6823,17 @@ def load_saved_dashboard_frames() -> List[Dict[str, pd.DataFrame]]:
 
         try:
             if suffix == ".json" and track_name == TRACK_API:
-                frame = process_uploaded_file(path, label)
-                frame["Region"] = item.get("region") or infer_saved_report_info(file_name).get("region", frame.get("Region", "Unknown"))
+                source_name = item.get("original_file_name") or file_name
+                frame = process_uploaded_file(path, Path(source_name).stem)
+                frame["Label"] = Path(source_name).stem
+                frame["Region"] = item.get("region") or infer_saved_report_info(source_name).get("region", frame.get("Region", "Unknown"))
                 run_info = frame.get("Run_Info")
                 if run_info is None or run_info.empty:
                     run_info = pd.DataFrame([{}])
                 run_info = run_info.copy()
                 if run_info.empty:
                     run_info = pd.DataFrame([{}])
-                run_info.loc[0, "Report File"] = file_name
+                run_info.loc[0, "Report File"] = source_name
                 run_info.loc[0, "Date"] = item.get("date") or run_info.loc[0].get("Date", "N/A")
                 run_info.loc[0, "Duration"] = item.get("duration") or run_info.loc[0].get("Duration", "N/A")
                 run_info.loc[0, "Region"] = frame.get("Region", run_info.loc[0].get("Region", "Unknown"))
@@ -6903,9 +6910,6 @@ def load_static_saved_dashboard() -> bool:
         for item in uploads
         if (SAVED_REPORTS_DIR / item.get("saved_name", "")).exists()
     )
-    if st.session_state.get("saved_dashboard_signature") == signature and st.session_state.get("run_frames"):
-        return True
-
     st.session_state["run_frames"] = frames
     st.session_state["excel_bytes"] = st.session_state.get("excel_bytes")
     st.session_state["report_file_name"] = "JMeter_Report.xlsx"

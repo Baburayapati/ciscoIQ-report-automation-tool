@@ -1279,10 +1279,20 @@ def write_excel(frames: Dict[str, pd.DataFrame], output_excel_path: str | Path, 
                 df = df.copy()
                 df["__SLA Sec"] = df["SLA Sec"]
             df = df.drop(
-                columns=[c for c in ["SLA Sec", "SLA Rule", "SLA Status", "SLA Breach Sec"] if c in df.columns],
+                columns=[c for c in ["SLA Rule", "SLA Status", "SLA Breach Sec"] if c in df.columns],
                 errors="ignore",
             )
+            if "SLA Sec" in df.columns:
+                df = df.drop(columns=["SLA Sec"], errors="ignore")
             df = df.rename(columns={"Feature": "Tracks", "Scenario": "Transactions"})
+            if {"Transactions", "Endpoint"}.issubset(df.columns):
+                tx_empty = df["Transactions"].fillna("").astype(str).str.strip().eq("").all()
+                endpoint_empty = df["Endpoint"].fillna("").astype(str).str.strip().eq("").all()
+                cx_like = df.get("Tracks", pd.Series(dtype=str)).astype(str).str.match(r"^T\d+", na=False).sum() >= 3
+                if cx_like and tx_empty:
+                    df = df.drop(columns=["Transactions"], errors="ignore")
+                if cx_like and endpoint_empty:
+                    df = df.drop(columns=["Endpoint"], errors="ignore")
         if sheet_name in ["Transactions", "Errors"]:
             df = df.rename(columns={
                 "transaction": "Transaction",
