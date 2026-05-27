@@ -4744,7 +4744,71 @@ def render_detailed_report_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
     selected_status = c2.multiselect("SLA Status", ["PASS", "FAIL"], default=["PASS", "FAIL"])
     sort_col = c3.selectbox("Sort by", ["Avg ResTime in sec", "Min ResTime in sec", "MaxRes Time in sec", "errorCount", "sampleCount"])
     if st.session_state.get("active_program") == PROGRAM_CX_AI_ASSISTANT:
+        st.markdown(
+            """
+<style>
+.cx-detail-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid #d3dbe8;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #f8fbff 0%, #f2f6fc 100%);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
+}
+.cx-detail-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  color: #111827;
+}
+.cx-detail-table th,
+.cx-detail-table td {
+  border: 1px solid #cfd8e3;
+  padding: 8px 10px;
+  white-space: nowrap;
+  text-align: right;
+  background: #f8fafc;
+  font-size: 13px;
+  font-weight: 700;
+}
+.cx-detail-table th.api-col,
+.cx-detail-table td.api-col {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  text-align: left;
+  min-width: 210px;
+  max-width: 280px;
+  background: #eef3f9;
+}
+.cx-detail-table th.result-group {
+  background: linear-gradient(180deg, #194b9b 0%, #103b81 100%);
+  color: #ffffff;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 900;
+}
+.cx-detail-table thead tr:nth-child(2) th {
+  background: #eaf0f7;
+  color: #344256;
+  font-size: 11px;
+  font-weight: 800;
+}
+.cx-detail-table td.fail-status {
+  background: #ffe1e5;
+  color: #a0141a;
+}
+.cx-detail-table td.pass-status {
+  background: #edf8f0;
+  color: #166534;
+}
+</style>
+""",
+            unsafe_allow_html=True,
+        )
         rows = []
+        result_labels = [run_display_label(frames) for frames in run_frames]
+        metrics = ["Avg", "Min", "Max", "SLA", "Errors", "Samples"]
         for track in selected_tracks:
             row = {"API": track}
             for frames in run_frames:
@@ -4759,24 +4823,45 @@ def render_detailed_report_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
                 if api_df.empty:
                     continue
                 label = run_display_label(frames)
-                row[f"Avg - {label}"] = round(float(pd.to_numeric(api_df.get("Avg ResTime in sec"), errors="coerce").mean()), 2)
-                row[f"Min - {label}"] = round(float(pd.to_numeric(api_df.get("Min ResTime in sec"), errors="coerce").min()), 2)
-                row[f"Max - {label}"] = round(float(pd.to_numeric(api_df.get("MaxRes Time in sec"), errors="coerce").max()), 2)
-                row[f"SLA - {label}"] = str(api_df.get("SLA Status", pd.Series(["N/A"])).astype(str).iloc[0])
-                row[f"Errors - {label}"] = int(pd.to_numeric(api_df.get("errorCount", 0), errors="coerce").fillna(0).sum())
-                row[f"Samples - {label}"] = int(pd.to_numeric(api_df.get("sampleCount", 0), errors="coerce").fillna(0).sum())
+                row[(label, "Avg")] = round(float(pd.to_numeric(api_df.get("Avg ResTime in sec"), errors="coerce").mean()), 2)
+                row[(label, "Min")] = round(float(pd.to_numeric(api_df.get("Min ResTime in sec"), errors="coerce").min()), 2)
+                row[(label, "Max")] = round(float(pd.to_numeric(api_df.get("MaxRes Time in sec"), errors="coerce").max()), 2)
+                row[(label, "SLA")] = str(api_df.get("SLA Status", pd.Series(["N/A"])).astype(str).iloc[0])
+                row[(label, "Errors")] = int(pd.to_numeric(api_df.get("errorCount", 0), errors="coerce").fillna(0).sum())
+                row[(label, "Samples")] = int(pd.to_numeric(api_df.get("sampleCount", 0), errors="coerce").fillna(0).sum())
             rows.append(row)
-        comparison_df = pd.DataFrame(rows)
-        if comparison_df.empty:
+        if not rows:
             st.info("No CX AI Assistant APIs match the selected filters.")
         else:
-            metric_cols = [col for col in comparison_df.columns if col != "API"]
             if sort_col in df.columns:
-                sort_values = filtered = df[df["Feature"].isin(selected_tracks)].groupby("Feature")[sort_col].max(numeric_only=True)
-                comparison_df["_sort"] = comparison_df["API"].map(sort_values).fillna(0)
-                comparison_df = comparison_df.sort_values("_sort", ascending=False).drop(columns=["_sort"])
-            st.caption("CX AI Assistant APIs are shown once with selected result files compared side by side.")
-            st.dataframe(comparison_df[["API"] + metric_cols], use_container_width=True, hide_index=True, height=650)
+                sort_values = df[df["Feature"].isin(selected_tracks)].groupby("Feature")[sort_col].max(numeric_only=True)
+                rows = sorted(rows, key=lambda item: float(sort_values.get(item.get("API"), 0) or 0), reverse=True)
+            header_top = ['<tr><th class="api-col" rowspan="2">API</th>']
+            for label in result_labels:
+                header_top.append(f'<th class="result-group" colspan="{len(metrics)}">{html.escape(label)}</th>')
+            header_top.append("</tr>")
+            header_second = ["<tr>"]
+            for _ in result_labels:
+                header_second.extend([f"<th>{html.escape(metric)}</th>" for metric in metrics])
+            header_second.append("</tr>")
+
+            body_rows = []
+            for row in rows:
+                cells = [f'<td class="api-col">{html.escape(str(row.get("API", "")))}</td>']
+                for label in result_labels:
+                    for metric in metrics:
+                        value = row.get((label, metric), "-")
+                        cls = ""
+                        if metric == "SLA":
+                            status = str(value).upper()
+                            cls = "pass-status" if status == "PASS" else "fail-status" if status == "FAIL" else ""
+                        cells.append(f'<td class="{cls}">{html.escape(format_compare_cell(value))}</td>')
+                body_rows.append(f"<tr>{''.join(cells)}</tr>")
+            st.caption("CX AI Assistant APIs are grouped once and selected result files are compared under common report headings.")
+            st.markdown(
+                f'<div class="cx-detail-table-wrap"><table class="cx-detail-table"><thead>{"".join(header_top)}{"".join(header_second)}</thead><tbody>{"".join(body_rows)}</tbody></table></div>',
+                unsafe_allow_html=True,
+            )
         st.markdown("</div>", unsafe_allow_html=True)
         return
     filtered = df[df["Feature"].isin(selected_tracks) & df["SLA Status"].isin(selected_status)].sort_values(sort_col, ascending=False)
