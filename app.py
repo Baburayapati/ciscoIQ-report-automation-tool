@@ -4703,13 +4703,49 @@ def render_detailed_report_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
         st.markdown("</div>", unsafe_allow_html=True)
         return
 
+    if active_track == TRACK_CLOUD:
+        cloud_df = cloud_raw_original_df(run_frames)
+        if cloud_df.empty:
+            st.info("No Cloud Assist Connector metrics available.")
+        else:
+            st.dataframe(cloud_df, use_container_width=True, hide_index=True, height=min(760, 78 + 30 * len(cloud_df)))
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    if active_track == TRACK_INVENTORY:
+        inv_df = inventory_raw_original_df(run_frames)
+        if inv_df.empty:
+            st.info("No Customer Inventory Benchmarking metrics available.")
+        else:
+            st.dataframe(inv_df, use_container_width=True, hide_index=True, height=min(760, 78 + 30 * len(inv_df)))
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    if active_track == TRACK_UI:
+        raw_detail = build_ui_raw_detail_df(run_frames)
+        speed_rows_count = 0
+        speed_pass = 0.0
+        if not raw_detail.empty:
+            speed_col = pick_ui_speed_index_column(raw_detail)
+            speed_vals = pd.to_numeric(raw_detail.get(speed_col, pd.Series(dtype=float)), errors="coerce").dropna() if speed_col else pd.Series(dtype=float)
+            if not speed_vals.empty:
+                speed_rows_count = int(len(speed_vals))
+                speed_pass = round(float((speed_vals <= 3.0).mean() * 100), 2)
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Speed Index Rows", f"{speed_rows_count:,}")
+        c2.metric("Speed Index SLA", "< 3s")
+        c3.metric("Speed Index Pass %", f"{speed_pass:.2f}%")
+
+        if raw_detail.empty:
+            st.info("No raw UI CSV rows available for detailed view.")
+        else:
+            st.dataframe(raw_detail, use_container_width=True, hide_index=True, height=min(760, 78 + 28 * len(raw_detail)))
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
     axis_col = "Feature"
-    axis_label = "API" if active_track == TRACK_API else "Metric"
-    if active_track in {TRACK_CLOUD, TRACK_INVENTORY} and "Scenario" in df.columns:
-        non_empty_scenarios = df["Scenario"].dropna().astype(str).str.strip()
-        if not non_empty_scenarios.empty:
-            axis_col = "Scenario"
-            axis_label = "Customer / Scenario"
+    axis_label = "API"
 
     c1, c2, c3 = st.columns(3)
     items = sorted(df[axis_col].dropna().astype(str).unique().tolist()) if axis_col in df.columns else []
@@ -4836,47 +4872,6 @@ def render_detailed_report_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
     else:
         st.info("No rows match the selected detailed report filters.")
 
-    if st.session_state.get("active_track") == TRACK_CLOUD:
-        cloud_df = cloud_raw_original_df(run_frames)
-        st.markdown('<div class="dashboard-subtitle" style="margin-top:14px;">Raw Uploaded Rows</div>', unsafe_allow_html=True)
-        if cloud_df.empty:
-            st.info("No Cloud Assist Connector metrics available.")
-        else:
-            st.dataframe(cloud_df, use_container_width=True, hide_index=True, height=min(760, 78 + 30 * len(cloud_df)))
-        st.markdown("</div>", unsafe_allow_html=True)
-        return
-    if st.session_state.get("active_track") == TRACK_INVENTORY:
-        inv_df = inventory_raw_original_df(run_frames)
-        st.markdown('<div class="dashboard-subtitle" style="margin-top:14px;">Raw Uploaded Rows</div>', unsafe_allow_html=True)
-        if inv_df.empty:
-            st.info("No Customer Inventory Benchmarking metrics available.")
-        else:
-            st.dataframe(inv_df, use_container_width=True, hide_index=True, height=min(760, 78 + 30 * len(inv_df)))
-        st.markdown("</div>", unsafe_allow_html=True)
-        return
-    if st.session_state.get("active_track") == TRACK_UI:
-        raw_detail = build_ui_raw_detail_df(run_frames)
-        speed_rows_count = 0
-        speed_pass = 0.0
-        if not raw_detail.empty:
-            speed_col = pick_ui_speed_index_column(raw_detail)
-            speed_vals = pd.to_numeric(raw_detail.get(speed_col, pd.Series(dtype=float)), errors="coerce").dropna() if speed_col else pd.Series(dtype=float)
-            if not speed_vals.empty:
-                speed_rows_count = int(len(speed_vals))
-                speed_pass = round(float((speed_vals <= 3.0).mean() * 100), 2)
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Speed Index Rows", f"{speed_rows_count:,}")
-        c2.metric("Speed Index SLA", "< 3s")
-        c3.metric("Speed Index Pass %", f"{speed_pass:.2f}%")
-
-        st.markdown('<div class="dashboard-subtitle" style="margin-top:14px;">Raw Uploaded Rows</div>', unsafe_allow_html=True)
-        if raw_detail.empty:
-            st.info("No raw UI CSV rows available for detailed view.")
-        else:
-            st.dataframe(raw_detail, use_container_width=True, hide_index=True, height=min(760, 78 + 28 * len(raw_detail)))
-        st.markdown("</div>", unsafe_allow_html=True)
-        return
     st.markdown("</div>", unsafe_allow_html=True)
 
 
