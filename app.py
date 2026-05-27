@@ -2876,6 +2876,8 @@ def add_ui_sla_columns(apis_df: pd.DataFrame, program_name: str = "") -> pd.Data
     df["API"] = df["Feature"] + "/" + df["Scenario"] + "/" + df["Endpoint"]
     for col in [
         "Avg ResTime in sec", "Min ResTime in sec", "MaxRes Time in sec",
+        "50thPercentile Resp Time in Sec", "90thPercentile Resp Time in Sec",
+        "95thPercentile Resp Time in Sec", "99thPercentile Resp Time in Sec",
         "sampleCount", "errorCount", "errorPct",
     ]:
         if col in df.columns:
@@ -4808,7 +4810,7 @@ def render_detailed_report_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
         )
         rows = []
         result_labels = [run_display_label(frames) for frames in run_frames]
-        metrics = ["Avg", "Min", "Max", "SLA", "Errors", "Samples"]
+        metrics = ["Avg", "Min", "Max", "50P", "90P", "95P", "99P", "Errors", "Samples"]
         for track in selected_tracks:
             row = {"API": track}
             for frames in run_frames:
@@ -4826,7 +4828,10 @@ def render_detailed_report_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
                 row[(label, "Avg")] = round(float(pd.to_numeric(api_df.get("Avg ResTime in sec"), errors="coerce").mean()), 2)
                 row[(label, "Min")] = round(float(pd.to_numeric(api_df.get("Min ResTime in sec"), errors="coerce").min()), 2)
                 row[(label, "Max")] = round(float(pd.to_numeric(api_df.get("MaxRes Time in sec"), errors="coerce").max()), 2)
-                row[(label, "SLA")] = str(api_df.get("SLA Status", pd.Series(["N/A"])).astype(str).iloc[0])
+                row[(label, "50P")] = round(float(pd.to_numeric(api_df.get("50thPercentile Resp Time in Sec"), errors="coerce").mean()), 2) if "50thPercentile Resp Time in Sec" in api_df.columns else "-"
+                row[(label, "90P")] = round(float(pd.to_numeric(api_df.get("90thPercentile Resp Time in Sec"), errors="coerce").mean()), 2) if "90thPercentile Resp Time in Sec" in api_df.columns else "-"
+                row[(label, "95P")] = round(float(pd.to_numeric(api_df.get("95thPercentile Resp Time in Sec"), errors="coerce").mean()), 2) if "95thPercentile Resp Time in Sec" in api_df.columns else "-"
+                row[(label, "99P")] = round(float(pd.to_numeric(api_df.get("99thPercentile Resp Time in Sec"), errors="coerce").mean()), 2) if "99thPercentile Resp Time in Sec" in api_df.columns else "-"
                 row[(label, "Errors")] = int(pd.to_numeric(api_df.get("errorCount", 0), errors="coerce").fillna(0).sum())
                 row[(label, "Samples")] = int(pd.to_numeric(api_df.get("sampleCount", 0), errors="coerce").fillna(0).sum())
             rows.append(row)
@@ -4852,9 +4857,6 @@ def render_detailed_report_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
                     for metric in metrics:
                         value = row.get((label, metric), "-")
                         cls = ""
-                        if metric == "SLA":
-                            status = str(value).upper()
-                            cls = "pass-status" if status == "PASS" else "fail-status" if status == "FAIL" else ""
                         cells.append(f'<td class="{cls}">{html.escape(format_compare_cell(value))}</td>')
                 body_rows.append(f"<tr>{''.join(cells)}</tr>")
             st.caption("CX AI Assistant APIs are grouped once and selected result files are compared under common report headings.")
@@ -5349,7 +5351,13 @@ def render_overview_comparison_summary(run_frames: List[Dict[str, pd.DataFrame]]
 
 
 def standard_api_cols(df: pd.DataFrame) -> List[str]:
-    return safe_cols(df, ["Feature", "Scenario", "Endpoint", "sampleCount", "errorCount", "errorPct", "Avg ResTime in sec", "Min ResTime in sec", "MaxRes Time in sec", "SLA Sec", "SLA Status", "SLA Breach Sec"])
+    return safe_cols(df, [
+        "Feature", "Scenario", "Endpoint", "sampleCount", "errorCount", "errorPct",
+        "Avg ResTime in sec", "Min ResTime in sec", "MaxRes Time in sec",
+        "50thPercentile Resp Time in Sec", "90thPercentile Resp Time in Sec",
+        "95thPercentile Resp Time in Sec", "99thPercentile Resp Time in Sec",
+        "SLA Sec", "SLA Status", "SLA Breach Sec",
+    ])
 
 
 def extract_top_n(question: str, default: int = 10) -> int:

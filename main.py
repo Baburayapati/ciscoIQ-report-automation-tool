@@ -13,7 +13,6 @@ from openpyxl.utils import get_column_letter
 
 
 REMOVE_COLUMNS = [
-    "medianResTime",
     "throughput",
     "receivedKBytesPerSec",
     "sentKBytesPerSec",
@@ -23,6 +22,7 @@ TIME_COLUMNS_MS_TO_SEC = {
     "meanResTime": "Avg ResTime in sec",
     "minResTime": "Min ResTime in sec",
     "maxResTime": "MaxRes Time in sec",
+    "medianResTime": "50thPercentile Resp Time in Sec",
     "pct1ResTime": "90thPercentile Resp Time in Sec",
     "pct2ResTime": "95thPercentile Resp Time in Sec",
     "pct3ResTime": "99thPercentile Resp Time in Sec",
@@ -327,6 +327,7 @@ def order_columns(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
             "Avg ResTime in sec",
             "Min ResTime in sec",
             "MaxRes Time in sec",
+            "50thPercentile Resp Time in Sec",
             "90thPercentile Resp Time in Sec",
             "95thPercentile Resp Time in Sec",
             "99thPercentile Resp Time in Sec",
@@ -343,6 +344,7 @@ def order_columns(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
         "Avg ResTime in sec",
         "Min ResTime in sec",
         "MaxRes Time in sec",
+        "50thPercentile Resp Time in Sec",
         "90thPercentile Resp Time in Sec",
         "95thPercentile Resp Time in Sec",
         "99thPercentile Resp Time in Sec",
