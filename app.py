@@ -4745,7 +4745,7 @@ def render_detailed_report_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
     selected_tracks = c1.multiselect("Track", tracks, default=default_tracks)
     selected_status = c2.multiselect("SLA Status", ["PASS", "FAIL"], default=["PASS", "FAIL"])
     sort_col = c3.selectbox("Sort by", ["Avg ResTime in sec", "Min ResTime in sec", "MaxRes Time in sec", "errorCount", "sampleCount"])
-    if st.session_state.get("active_program") == PROGRAM_CX_AI_ASSISTANT:
+    if st.session_state.get("active_track") == TRACK_API:
         st.markdown(
             """
 <style>
@@ -4810,7 +4810,7 @@ def render_detailed_report_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
         )
         rows = []
         result_labels = [run_display_label(frames) for frames in run_frames]
-        metrics = ["Avg", "Min", "Max", "50P", "90P", "95P", "99P", "Errors", "Samples"]
+        metrics = ["Avg", "Min", "Max", "90P", "95P", "99P", "Errors", "Samples"]
         for track in selected_tracks:
             row = {"API": track}
             for frames in run_frames:
@@ -4828,7 +4828,6 @@ def render_detailed_report_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
                 row[(label, "Avg")] = round(float(pd.to_numeric(api_df.get("Avg ResTime in sec"), errors="coerce").mean()), 2)
                 row[(label, "Min")] = round(float(pd.to_numeric(api_df.get("Min ResTime in sec"), errors="coerce").min()), 2)
                 row[(label, "Max")] = round(float(pd.to_numeric(api_df.get("MaxRes Time in sec"), errors="coerce").max()), 2)
-                row[(label, "50P")] = round(float(pd.to_numeric(api_df.get("50thPercentile Resp Time in Sec"), errors="coerce").mean()), 2) if "50thPercentile Resp Time in Sec" in api_df.columns else "-"
                 row[(label, "90P")] = round(float(pd.to_numeric(api_df.get("90thPercentile Resp Time in Sec"), errors="coerce").mean()), 2) if "90thPercentile Resp Time in Sec" in api_df.columns else "-"
                 row[(label, "95P")] = round(float(pd.to_numeric(api_df.get("95thPercentile Resp Time in Sec"), errors="coerce").mean()), 2) if "95thPercentile Resp Time in Sec" in api_df.columns else "-"
                 row[(label, "99P")] = round(float(pd.to_numeric(api_df.get("99thPercentile Resp Time in Sec"), errors="coerce").mean()), 2) if "99thPercentile Resp Time in Sec" in api_df.columns else "-"
@@ -4836,7 +4835,7 @@ def render_detailed_report_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
                 row[(label, "Samples")] = int(pd.to_numeric(api_df.get("sampleCount", 0), errors="coerce").fillna(0).sum())
             rows.append(row)
         if not rows:
-            st.info("No CX AI Assistant APIs match the selected filters.")
+            st.info("No API rows match the selected filters.")
         else:
             if sort_col in df.columns:
                 sort_values = df[df["Feature"].isin(selected_tracks)].groupby("Feature")[sort_col].max(numeric_only=True)
@@ -4859,7 +4858,7 @@ def render_detailed_report_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
                         cls = ""
                         cells.append(f'<td class="{cls}">{html.escape(format_compare_cell(value))}</td>')
                 body_rows.append(f"<tr>{''.join(cells)}</tr>")
-            st.caption("CX AI Assistant APIs are grouped once and selected result files are compared under common report headings.")
+            st.caption("APIs are grouped once and selected result files are compared under common report headings.")
             st.markdown(
                 f'<div class="cx-detail-table-wrap"><table class="cx-detail-table"><thead>{"".join(header_top)}{"".join(header_second)}</thead><tbody>{"".join(body_rows)}</tbody></table></div>',
                 unsafe_allow_html=True,
