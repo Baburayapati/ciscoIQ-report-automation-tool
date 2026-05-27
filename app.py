@@ -4695,8 +4695,150 @@ def render_trends_tab(run_frames: List[Dict[str, pd.DataFrame]], compact: bool =
 def render_detailed_report_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> None:
     df = combined_df(run_frames)
     st.markdown('<div class="panel"><div class="panel-title">DETAILED REPORT</div>', unsafe_allow_html=True)
+    active_track = st.session_state.get("active_track")
+    if active_track == TRACK_UI:
+        df = apply_ui_speed_index_sla(df)
+    if df.empty:
+        st.info("No detailed metrics available.")
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    axis_col = "Feature"
+    axis_label = "API" if active_track == TRACK_API else "Metric"
+    if active_track in {TRACK_CLOUD, TRACK_INVENTORY} and "Scenario" in df.columns:
+        non_empty_scenarios = df["Scenario"].dropna().astype(str).str.strip()
+        if not non_empty_scenarios.empty:
+            axis_col = "Scenario"
+            axis_label = "Customer / Scenario"
+
+    c1, c2, c3 = st.columns(3)
+    items = sorted(df[axis_col].dropna().astype(str).unique().tolist()) if axis_col in df.columns else []
+    default_items = items if st.session_state.get("active_program") == PROGRAM_CX_AI_ASSISTANT or active_track != TRACK_API else items[: min(10, len(items))]
+    selected_items = c1.multiselect(axis_label, items, default=default_items, key=f"detail_items_{sanitize_token(str(active_track))}")
+    status_options = sorted(df.get("SLA Status", pd.Series(dtype=str)).dropna().astype(str).unique().tolist()) or ["PASS", "FAIL"]
+    default_status = [value for value in ["PASS", "FAIL", "N/A"] if value in status_options] or status_options
+    selected_status = c2.multiselect("SLA Status", status_options, default=default_status, key=f"detail_status_{sanitize_token(str(active_track))}")
+    sort_options = [col for col in ["Avg ResTime in sec", "Min ResTime in sec", "MaxRes Time in sec", "errorCount", "sampleCount"] if col in df.columns]
+    sort_col = c3.selectbox("Sort by", sort_options or ["Avg ResTime in sec"], key=f"detail_sort_{sanitize_token(str(active_track))}")
+
+    st.markdown(
+        """
+<style>
+.detail-compare-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid #d3dbe8;
+  border-radius: 14px;
+  background: linear-gradient(180deg, #f8fbff 0%, #f2f6fc 100%);
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
+}
+.detail-compare-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  color: #111827;
+}
+.detail-compare-table th,
+.detail-compare-table td {
+  border: 1px solid #cfd8e3;
+  padding: 8px 10px;
+  white-space: nowrap;
+  text-align: right;
+  background: #f8fafc;
+  font-size: 13px;
+  font-weight: 700;
+}
+.detail-compare-table th.api-col,
+.detail-compare-table td.api-col {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  text-align: left;
+  min-width: 210px;
+  max-width: 320px;
+  background: #eef3f9;
+}
+.detail-compare-table th.result-group {
+  background: linear-gradient(180deg, #194b9b 0%, #103b81 100%);
+  color: #ffffff;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 900;
+}
+.detail-compare-table thead tr:nth-child(2) th {
+  background: #eaf0f7;
+  color: #344256;
+  font-size: 11px;
+  font-weight: 800;
+}
+</style>
+""",
+        unsafe_allow_html=True,
+    )
+
+    result_labels = []
+    seen_labels: Dict[str, int] = {}
+    for frames in run_frames:
+        base_label = run_display_label(frames)
+        seen_labels[base_label] = seen_labels.get(base_label, 0) + 1
+        result_labels.append(base_label if seen_labels[base_label] == 1 else f"{base_label} ({seen_labels[base_label]})")
+
+    metrics = ["Avg", "Min", "Max", "90P", "95P", "99P", "Errors", "Samples"]
+    rows = []
+    for item in selected_items:
+        row = {axis_label: item}
+        for frames, label in zip(run_frames, result_labels):
+            api_df = remove_cx_ai_create_rows_from_frames(frames).get("APIs", pd.DataFrame()).copy()
+            if active_track == TRACK_UI:
+                api_df = apply_ui_speed_index_sla(api_df)
+            if api_df.empty or axis_col not in api_df.columns:
+                continue
+            api_df = api_df[api_df[axis_col].astype(str) == str(item)].copy()
+            if selected_status and "SLA Status" in api_df.columns:
+                api_df = api_df[api_df["SLA Status"].astype(str).isin(selected_status)]
+            if api_df.empty:
+                continue
+            row[(label, "Avg")] = round(float(pd.to_numeric(api_df.get("Avg ResTime in sec"), errors="coerce").mean()), 2)
+            row[(label, "Min")] = round(float(pd.to_numeric(api_df.get("Min ResTime in sec"), errors="coerce").min()), 2)
+            row[(label, "Max")] = round(float(pd.to_numeric(api_df.get("MaxRes Time in sec"), errors="coerce").max()), 2)
+            row[(label, "90P")] = round(float(pd.to_numeric(api_df.get("90thPercentile Resp Time in Sec"), errors="coerce").mean()), 2) if "90thPercentile Resp Time in Sec" in api_df.columns else "-"
+            row[(label, "95P")] = round(float(pd.to_numeric(api_df.get("95thPercentile Resp Time in Sec"), errors="coerce").mean()), 2) if "95thPercentile Resp Time in Sec" in api_df.columns else "-"
+            row[(label, "99P")] = round(float(pd.to_numeric(api_df.get("99thPercentile Resp Time in Sec"), errors="coerce").mean()), 2) if "99thPercentile Resp Time in Sec" in api_df.columns else "-"
+            row[(label, "Errors")] = int(pd.to_numeric(api_df.get("errorCount", 0), errors="coerce").fillna(0).sum())
+            row[(label, "Samples")] = int(pd.to_numeric(api_df.get("sampleCount", 0), errors="coerce").fillna(0).sum())
+        rows.append(row)
+
+    if rows:
+        if sort_col in df.columns and selected_items:
+            sort_values = df[df[axis_col].astype(str).isin(selected_items)].groupby(axis_col)[sort_col].max(numeric_only=True)
+            rows = sorted(rows, key=lambda item: float(sort_values.get(item.get(axis_label), 0) or 0), reverse=True)
+        header_top = [f'<tr><th class="api-col" rowspan="2">{html.escape(axis_label)}</th>']
+        for label in result_labels:
+            header_top.append(f'<th class="result-group" colspan="{len(metrics)}">{html.escape(label)}</th>')
+        header_top.append("</tr>")
+        header_second = ["<tr>"]
+        for _ in result_labels:
+            header_second.extend([f"<th>{html.escape(metric)}</th>" for metric in metrics])
+        header_second.append("</tr>")
+
+        body_rows = []
+        for row in rows:
+            cells = [f'<td class="api-col">{html.escape(str(row.get(axis_label, "")))}</td>']
+            for label in result_labels:
+                for metric in metrics:
+                    cells.append(f'<td>{html.escape(format_compare_cell(row.get((label, metric), "-")))}</td>')
+            body_rows.append(f"<tr>{''.join(cells)}</tr>")
+        st.caption("Detailed metrics are grouped once and selected result files are compared under common report headings.")
+        st.markdown(
+            f'<div class="detail-compare-table-wrap"><table class="detail-compare-table"><thead>{"".join(header_top)}{"".join(header_second)}</thead><tbody>{"".join(body_rows)}</tbody></table></div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.info("No rows match the selected detailed report filters.")
+
     if st.session_state.get("active_track") == TRACK_CLOUD:
         cloud_df = cloud_raw_original_df(run_frames)
+        st.markdown('<div class="dashboard-subtitle" style="margin-top:14px;">Raw Uploaded Rows</div>', unsafe_allow_html=True)
         if cloud_df.empty:
             st.info("No Cloud Assist Connector metrics available.")
         else:
@@ -4705,6 +4847,7 @@ def render_detailed_report_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
         return
     if st.session_state.get("active_track") == TRACK_INVENTORY:
         inv_df = inventory_raw_original_df(run_frames)
+        st.markdown('<div class="dashboard-subtitle" style="margin-top:14px;">Raw Uploaded Rows</div>', unsafe_allow_html=True)
         if inv_df.empty:
             st.info("No Customer Inventory Benchmarking metrics available.")
         else:
@@ -4712,11 +4855,6 @@ def render_detailed_report_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
         st.markdown("</div>", unsafe_allow_html=True)
         return
     if st.session_state.get("active_track") == TRACK_UI:
-        df = apply_ui_speed_index_sla(df)
-        if df.empty:
-            st.info("No UI metrics available.")
-            st.markdown("</div>", unsafe_allow_html=True)
-            return
         raw_detail = build_ui_raw_detail_df(run_frames)
         speed_rows_count = 0
         speed_pass = 0.0
@@ -4732,141 +4870,13 @@ def render_detailed_report_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
         c2.metric("Speed Index SLA", "< 3s")
         c3.metric("Speed Index Pass %", f"{speed_pass:.2f}%")
 
+        st.markdown('<div class="dashboard-subtitle" style="margin-top:14px;">Raw Uploaded Rows</div>', unsafe_allow_html=True)
         if raw_detail.empty:
             st.info("No raw UI CSV rows available for detailed view.")
         else:
             st.dataframe(raw_detail, use_container_width=True, hide_index=True, height=min(760, 78 + 28 * len(raw_detail)))
         st.markdown("</div>", unsafe_allow_html=True)
         return
-
-    c1, c2, c3 = st.columns(3)
-    tracks = sorted(df["Feature"].dropna().astype(str).unique().tolist())
-    default_tracks = tracks if st.session_state.get("active_program") == PROGRAM_CX_AI_ASSISTANT else tracks[: min(10, len(tracks))]
-    selected_tracks = c1.multiselect("Track", tracks, default=default_tracks)
-    selected_status = c2.multiselect("SLA Status", ["PASS", "FAIL"], default=["PASS", "FAIL"])
-    sort_col = c3.selectbox("Sort by", ["Avg ResTime in sec", "Min ResTime in sec", "MaxRes Time in sec", "errorCount", "sampleCount"])
-    if st.session_state.get("active_track") == TRACK_API:
-        st.markdown(
-            """
-<style>
-.cx-detail-table-wrap {
-  width: 100%;
-  overflow-x: auto;
-  border: 1px solid #d3dbe8;
-  border-radius: 14px;
-  background: linear-gradient(180deg, #f8fbff 0%, #f2f6fc 100%);
-  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.06);
-}
-.cx-detail-table {
-  width: max-content;
-  min-width: 100%;
-  border-collapse: collapse;
-  color: #111827;
-}
-.cx-detail-table th,
-.cx-detail-table td {
-  border: 1px solid #cfd8e3;
-  padding: 8px 10px;
-  white-space: nowrap;
-  text-align: right;
-  background: #f8fafc;
-  font-size: 13px;
-  font-weight: 700;
-}
-.cx-detail-table th.api-col,
-.cx-detail-table td.api-col {
-  position: sticky;
-  left: 0;
-  z-index: 2;
-  text-align: left;
-  min-width: 210px;
-  max-width: 280px;
-  background: #eef3f9;
-}
-.cx-detail-table th.result-group {
-  background: linear-gradient(180deg, #194b9b 0%, #103b81 100%);
-  color: #ffffff;
-  text-align: center;
-  font-size: 12px;
-  font-weight: 900;
-}
-.cx-detail-table thead tr:nth-child(2) th {
-  background: #eaf0f7;
-  color: #344256;
-  font-size: 11px;
-  font-weight: 800;
-}
-.cx-detail-table td.fail-status {
-  background: #ffe1e5;
-  color: #a0141a;
-}
-.cx-detail-table td.pass-status {
-  background: #edf8f0;
-  color: #166534;
-}
-</style>
-""",
-            unsafe_allow_html=True,
-        )
-        rows = []
-        result_labels = [run_display_label(frames) for frames in run_frames]
-        metrics = ["Avg", "Min", "Max", "90P", "95P", "99P", "Errors", "Samples"]
-        for track in selected_tracks:
-            row = {"API": track}
-            for frames in run_frames:
-                api_df = remove_cx_ai_create_rows_from_frames(frames).get("APIs", pd.DataFrame()).copy()
-                if api_df.empty or "Feature" not in api_df.columns:
-                    continue
-                api_df = api_df[api_df["Feature"].astype(str) == str(track)].copy()
-                if api_df.empty:
-                    continue
-                if "SLA Status" in api_df.columns:
-                    api_df = api_df[api_df["SLA Status"].astype(str).str.upper().isin(selected_status)]
-                if api_df.empty:
-                    continue
-                label = run_display_label(frames)
-                row[(label, "Avg")] = round(float(pd.to_numeric(api_df.get("Avg ResTime in sec"), errors="coerce").mean()), 2)
-                row[(label, "Min")] = round(float(pd.to_numeric(api_df.get("Min ResTime in sec"), errors="coerce").min()), 2)
-                row[(label, "Max")] = round(float(pd.to_numeric(api_df.get("MaxRes Time in sec"), errors="coerce").max()), 2)
-                row[(label, "90P")] = round(float(pd.to_numeric(api_df.get("90thPercentile Resp Time in Sec"), errors="coerce").mean()), 2) if "90thPercentile Resp Time in Sec" in api_df.columns else "-"
-                row[(label, "95P")] = round(float(pd.to_numeric(api_df.get("95thPercentile Resp Time in Sec"), errors="coerce").mean()), 2) if "95thPercentile Resp Time in Sec" in api_df.columns else "-"
-                row[(label, "99P")] = round(float(pd.to_numeric(api_df.get("99thPercentile Resp Time in Sec"), errors="coerce").mean()), 2) if "99thPercentile Resp Time in Sec" in api_df.columns else "-"
-                row[(label, "Errors")] = int(pd.to_numeric(api_df.get("errorCount", 0), errors="coerce").fillna(0).sum())
-                row[(label, "Samples")] = int(pd.to_numeric(api_df.get("sampleCount", 0), errors="coerce").fillna(0).sum())
-            rows.append(row)
-        if not rows:
-            st.info("No API rows match the selected filters.")
-        else:
-            if sort_col in df.columns:
-                sort_values = df[df["Feature"].isin(selected_tracks)].groupby("Feature")[sort_col].max(numeric_only=True)
-                rows = sorted(rows, key=lambda item: float(sort_values.get(item.get("API"), 0) or 0), reverse=True)
-            header_top = ['<tr><th class="api-col" rowspan="2">API</th>']
-            for label in result_labels:
-                header_top.append(f'<th class="result-group" colspan="{len(metrics)}">{html.escape(label)}</th>')
-            header_top.append("</tr>")
-            header_second = ["<tr>"]
-            for _ in result_labels:
-                header_second.extend([f"<th>{html.escape(metric)}</th>" for metric in metrics])
-            header_second.append("</tr>")
-
-            body_rows = []
-            for row in rows:
-                cells = [f'<td class="api-col">{html.escape(str(row.get("API", "")))}</td>']
-                for label in result_labels:
-                    for metric in metrics:
-                        value = row.get((label, metric), "-")
-                        cls = ""
-                        cells.append(f'<td class="{cls}">{html.escape(format_compare_cell(value))}</td>')
-                body_rows.append(f"<tr>{''.join(cells)}</tr>")
-            st.caption("APIs are grouped once and selected result files are compared under common report headings.")
-            st.markdown(
-                f'<div class="cx-detail-table-wrap"><table class="cx-detail-table"><thead>{"".join(header_top)}{"".join(header_second)}</thead><tbody>{"".join(body_rows)}</tbody></table></div>',
-                unsafe_allow_html=True,
-            )
-        st.markdown("</div>", unsafe_allow_html=True)
-        return
-    filtered = df[df["Feature"].isin(selected_tracks) & df["SLA Status"].isin(selected_status)].sort_values(sort_col, ascending=False)
-    st.dataframe(filtered[standard_api_cols(filtered)], use_container_width=True, hide_index=True, height=650)
     st.markdown("</div>", unsafe_allow_html=True)
 
 
