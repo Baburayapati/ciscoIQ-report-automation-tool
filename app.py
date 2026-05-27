@@ -4016,7 +4016,18 @@ def get_filtered_frames(run_frames: List[Dict[str, pd.DataFrame]], forced_region
     font-size:12px;
     margin:-4px 0 12px 0;
 }
+.filter-chip-scope + div [data-testid="stMultiSelect"] span[data-baseweb="tag"] {
+    background: linear-gradient(90deg,#2563eb,#7c3aed) !important;
+    color: #ffffff !important;
+    border-radius: 10px !important;
+    font-weight: 750 !important;
+}
+.filter-chip-scope + div [data-testid="stMultiSelect"] span[data-baseweb="tag"] svg {
+    color: #ffffff !important;
+    fill: #ffffff !important;
+}
 </style>
+<div class="filter-chip-scope"></div>
 <div class="filter-card-title">DATA & FILTERS</div>
 <div class="filter-help">Choose two or more visible reports and test dates, then apply.</div>
 """,
