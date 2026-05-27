@@ -4743,6 +4743,42 @@ def render_detailed_report_tab(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
     selected_tracks = c1.multiselect("Track", tracks, default=default_tracks)
     selected_status = c2.multiselect("SLA Status", ["PASS", "FAIL"], default=["PASS", "FAIL"])
     sort_col = c3.selectbox("Sort by", ["Avg ResTime in sec", "Min ResTime in sec", "MaxRes Time in sec", "errorCount", "sampleCount"])
+    if st.session_state.get("active_program") == PROGRAM_CX_AI_ASSISTANT:
+        rows = []
+        for track in selected_tracks:
+            row = {"API": track}
+            for frames in run_frames:
+                api_df = remove_cx_ai_create_rows_from_frames(frames).get("APIs", pd.DataFrame()).copy()
+                if api_df.empty or "Feature" not in api_df.columns:
+                    continue
+                api_df = api_df[api_df["Feature"].astype(str) == str(track)].copy()
+                if api_df.empty:
+                    continue
+                if "SLA Status" in api_df.columns:
+                    api_df = api_df[api_df["SLA Status"].astype(str).str.upper().isin(selected_status)]
+                if api_df.empty:
+                    continue
+                label = run_display_label(frames)
+                row[f"Avg - {label}"] = round(float(pd.to_numeric(api_df.get("Avg ResTime in sec"), errors="coerce").mean()), 2)
+                row[f"Min - {label}"] = round(float(pd.to_numeric(api_df.get("Min ResTime in sec"), errors="coerce").min()), 2)
+                row[f"Max - {label}"] = round(float(pd.to_numeric(api_df.get("MaxRes Time in sec"), errors="coerce").max()), 2)
+                row[f"SLA - {label}"] = str(api_df.get("SLA Status", pd.Series(["N/A"])).astype(str).iloc[0])
+                row[f"Errors - {label}"] = int(pd.to_numeric(api_df.get("errorCount", 0), errors="coerce").fillna(0).sum())
+                row[f"Samples - {label}"] = int(pd.to_numeric(api_df.get("sampleCount", 0), errors="coerce").fillna(0).sum())
+            rows.append(row)
+        comparison_df = pd.DataFrame(rows)
+        if comparison_df.empty:
+            st.info("No CX AI Assistant APIs match the selected filters.")
+        else:
+            metric_cols = [col for col in comparison_df.columns if col != "API"]
+            if sort_col in df.columns:
+                sort_values = filtered = df[df["Feature"].isin(selected_tracks)].groupby("Feature")[sort_col].max(numeric_only=True)
+                comparison_df["_sort"] = comparison_df["API"].map(sort_values).fillna(0)
+                comparison_df = comparison_df.sort_values("_sort", ascending=False).drop(columns=["_sort"])
+            st.caption("CX AI Assistant APIs are shown once with selected result files compared side by side.")
+            st.dataframe(comparison_df[["API"] + metric_cols], use_container_width=True, hide_index=True, height=650)
+        st.markdown("</div>", unsafe_allow_html=True)
+        return
     filtered = df[df["Feature"].isin(selected_tracks) & df["SLA Status"].isin(selected_status)].sort_values(sort_col, ascending=False)
     st.dataframe(filtered[standard_api_cols(filtered)], use_container_width=True, hide_index=True, height=650)
     st.markdown("</div>", unsafe_allow_html=True)
