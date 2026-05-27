@@ -3923,7 +3923,7 @@ def render_inventory_benchmark_dashboard(run_frames: List[Dict[str, pd.DataFrame
         "Overall Time",
     )
 
-def get_filtered_frames(run_frames: List[Dict[str, pd.DataFrame]], forced_region: str = "All", forced_track: str = "API", use_region_nav: bool = True) -> List[Dict[str, pd.DataFrame]]:
+def get_filtered_frames(run_frames: List[Dict[str, pd.DataFrame]], forced_region: str = "All", forced_track: str = "API") -> List[Dict[str, pd.DataFrame]]:
     def normalize_filter_date(value: str, label: str) -> str:
         parsed = extract_mmddyyyy_from_text(str(value or "")) or extract_mmddyyyy_from_text(str(label or ""))
         if parsed:
@@ -3984,7 +3984,7 @@ def get_filtered_frames(run_frames: List[Dict[str, pd.DataFrame]], forced_region
         if meta.empty:
             return []
 
-    if use_region_nav and forced_region and forced_region != "All":
+    if forced_region and forced_region != "All":
         meta = meta[meta["Region"].astype(str) == str(forced_region)].copy()
         if meta.empty:
             return []
@@ -4018,7 +4018,7 @@ def get_filtered_frames(run_frames: List[Dict[str, pd.DataFrame]], forced_region
 }
 </style>
 <div class="filter-card-title">DATA & FILTERS</div>
-<div class="filter-help">Choose one or more reports, dates, and regions, then apply.</div>
+<div class="filter-help">Choose two or more visible reports and test dates, then apply.</div>
 """,
             unsafe_allow_html=True,
         )
@@ -4030,18 +4030,17 @@ def get_filtered_frames(run_frames: List[Dict[str, pd.DataFrame]], forced_region
 
         legacy_file = current_filters.get("file")
         legacy_date = current_filters.get("date")
-        current_files = current_filters.get("files") or (files if legacy_file in {None, f"Compare Selected ({len(files)})"} else [legacy_file])
+        current_files = current_filters.get("files") or ([] if legacy_file in {None, f"Compare Selected ({len(files)})"} else [legacy_file])
         current_dates = current_filters.get("dates") or (dates if legacy_date in {None, f"All Dates ({len(dates)})"} else [legacy_date])
-        current_regions = current_filters.get("regions") or regions
 
-        current_files = [value for value in current_files if value in files] or files
+        current_files = [value for value in current_files if value in files]
         current_dates = [value for value in current_dates if value in dates] or dates
-        current_regions = [value for value in current_regions if value in regions] or regions
 
         selected_file_choices = st.multiselect(
             "Result File",
             files,
             default=current_files,
+            placeholder="Select two or more reports",
             key=f"dashboard_filter_file_choice_{scope_token}",
         )
         selected_date_choices = st.multiselect(
@@ -4050,20 +4049,13 @@ def get_filtered_frames(run_frames: List[Dict[str, pd.DataFrame]], forced_region
             default=current_dates,
             key=f"dashboard_filter_date_choice_{scope_token}",
         )
-        selected_region_choices = st.multiselect(
-            "Region",
-            regions,
-            default=current_regions,
-            key=f"dashboard_filter_region_choice_{scope_token}",
-        )
         apply_clicked = st.button("Apply Filters", type="primary", use_container_width=True, key=f"dashboard_apply_filters_{scope_token}")
         reset_clicked = st.button("Reset Filters", use_container_width=True, key=f"dashboard_reset_filters_{scope_token}")
 
         if reset_clicked:
             all_filters[scope_key] = {
-                "files": files,
+                "files": [],
                 "dates": dates,
-                "regions": regions,
             }
             st.session_state["applied_dashboard_filters"] = all_filters
             st.rerun()
@@ -4071,19 +4063,17 @@ def get_filtered_frames(run_frames: List[Dict[str, pd.DataFrame]], forced_region
             all_filters[scope_key] = {
                 "files": selected_file_choices,
                 "dates": selected_date_choices,
-                "regions": selected_region_choices,
             }
             st.session_state["applied_dashboard_filters"] = all_filters
 
         active_filters = st.session_state.get("applied_dashboard_filters", {}).get(scope_key, {
-            "files": files,
+            "files": [],
             "dates": dates,
-            "regions": regions,
         })
 
-    selected_files = [value for value in active_filters.get("files", files) if value in files]
+    selected_files = [value for value in active_filters.get("files", []) if value in files]
     selected_dates = [value for value in active_filters.get("dates", dates) if value in dates]
-    selected_regions = [value for value in active_filters.get("regions", regions) if value in regions]
+    selected_regions = regions
 
     if not selected_files or not selected_dates or not selected_regions:
         return []
@@ -4943,7 +4933,7 @@ def render_executive_dashboard(run_frames: List[Dict[str, pd.DataFrame]]) -> Non
     main_col, side_col = st.columns([4.35, .95], gap="medium")
 
     with side_col:
-        selected_frames = get_filtered_frames(run_frames, forced_region=region_focus, forced_track=active_track, use_region_nav=False)
+        selected_frames = get_filtered_frames(run_frames, forced_region=region_focus, forced_track=active_track)
         if selected_tab != "Chatbot" and active_track == TRACK_API:
             render_dashboard_excel_report_actions(region_focus)
 
