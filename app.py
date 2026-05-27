@@ -4039,7 +4039,7 @@ div[data-testid="stMultiSelect"] [role="button"][aria-label*="Clear value"] path
 }
 </style>
 <div class="filter-card-title">DATA & FILTERS</div>
-<div class="filter-help">Choose two or more visible reports and test dates, then apply.</div>
+<div class="filter-help">Region controls visible reports. Use these filters to narrow the selected result set.</div>
 """,
             unsafe_allow_html=True,
         )
@@ -4051,17 +4051,17 @@ div[data-testid="stMultiSelect"] [role="button"][aria-label*="Clear value"] path
 
         legacy_file = current_filters.get("file")
         legacy_date = current_filters.get("date")
-        current_files = current_filters.get("files") or ([] if legacy_file in {None, f"Compare Selected ({len(files)})"} else [legacy_file])
+        current_files = current_filters.get("files") or (files if legacy_file in {None, f"Compare Selected ({len(files)})"} else [legacy_file])
         current_dates = current_filters.get("dates") or (dates if legacy_date in {None, f"All Dates ({len(dates)})"} else [legacy_date])
 
-        current_files = [value for value in current_files if value in files]
+        current_files = [value for value in current_files if value in files] or files
         current_dates = [value for value in current_dates if value in dates] or dates
 
         selected_file_choices = st.multiselect(
             "Result File",
             files,
             default=current_files,
-            placeholder="Select two or more reports",
+            placeholder="Select reports",
             key=f"dashboard_filter_file_choice_{scope_token}",
         )
         selected_date_choices = st.multiselect(
@@ -4075,7 +4075,7 @@ div[data-testid="stMultiSelect"] [role="button"][aria-label*="Clear value"] path
 
         if reset_clicked:
             all_filters[scope_key] = {
-                "files": [],
+                "files": files,
                 "dates": dates,
             }
             st.session_state["applied_dashboard_filters"] = all_filters
@@ -4088,11 +4088,11 @@ div[data-testid="stMultiSelect"] [role="button"][aria-label*="Clear value"] path
             st.session_state["applied_dashboard_filters"] = all_filters
 
         active_filters = st.session_state.get("applied_dashboard_filters", {}).get(scope_key, {
-            "files": [],
+            "files": files,
             "dates": dates,
         })
 
-    selected_files = [value for value in active_filters.get("files", []) if value in files]
+    selected_files = [value for value in active_filters.get("files", files) if value in files]
     selected_dates = [value for value in active_filters.get("dates", dates) if value in dates]
     selected_regions = regions
 
